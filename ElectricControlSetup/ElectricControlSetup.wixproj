@@ -1,0 +1,22 @@
+﻿<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <DefineConstants>Version=1.0.14.0</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <DefineConstants>Version=1.0.14.0</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="Resources\ElectricControl.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Netfx.wixext" Version="5.0.2" />
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TestingSoftware.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="License\License.en-us.rtf" />
+    <None Include="License\License.zh-cn.rtf" />
+  </ItemGroup>
+</Project>

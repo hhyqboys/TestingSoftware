@@ -1,0 +1,418 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+		
+		<ComponentGroup Id="ElectricControl" Directory="INSTALLFOLDER">
+			<Component>
+				<File Source="TestingSoftware.exe" />
+				<RegistryValue Root="HKLM" Key="SOFTWARE\ElectricControl"  Name="root" Type="string" Value="[INSTALLFOLDER]" Action="write" />
+				<Shortcut Name="ElectricControl" Directory="DesktopFolder" Icon="ElectricControl.exe" Advertise="yes" />
+			</Component>
+			
+
+			<Component>
+				<File Source="adapters.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.BootstrapIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.BoxIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.CircumIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Codicons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Coolicons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Core.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Entypo.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.EvaIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.FeatherIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.FileIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Fontaudio.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.FontAwesome.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Fontisto.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.ForkAwesome.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.GameIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Ionicons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.JamIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Lucide.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Material.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.MaterialDesign.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.MaterialLight.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.MemoryIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Microns.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Modern.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Octicons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.PhosphorIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.PicolIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.PixelartIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.RadixIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.RemixIcon.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.RPGAwesome.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.SimpleIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Typicons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Unicons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.VaadinIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.WeatherIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.Zondicons.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.Abstractions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.Binder.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.CommandLine.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.EnvironmentVariables.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.FileExtensions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.Json.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Configuration.UserSecrets.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.DependencyInjection.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Diagnostics.Abstractions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Diagnostics.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.FileProviders.Abstractions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.FileProviders.Physical.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.FileSystemGlobbing.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Hosting.Abstractions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Hosting.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Logging.Abstractions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Logging.Configuration.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Logging.Console.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Logging.Debug.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Logging.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Logging.EventLog.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Logging.EventSource.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Options.ConfigurationExtensions.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Options.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Extensions.Primitives.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Xaml.Behaviors.dll" />
+			</Component>
+			<Component>
+				<File Source="MotorStudio.deps.json" />
+			</Component>
+			<Component>
+				<File Source="MotorStudio.dll" />
+			</Component>
+			<Component>
+				<File Source="MotorStudio.dll.config" />
+			</Component>
+			<Component>
+				<File Source="MotorStudio.runtimeconfig.json" />
+			</Component>
+			<Component>
+				<File Source="mvvm.dll" />
+			</Component>
+			<Component>
+				<File Source="OxyPlot.dll" />
+			</Component>
+			<Component>
+				<File Source="OxyPlot.Wpf.dll" />
+			</Component>
+			<Component>
+				<File Source="OxyPlot.Wpf.Shared.dll" />
+			</Component>
+			<Component>
+				<File Source="protocols.dll" />
+			</Component>
+			<Component>
+				<File Source="Serilog.dll" />
+			</Component>
+			<Component>
+				<File Source="Serilog.Enrichers.Process.dll" />
+			</Component>
+			<Component>
+				<File Source="Serilog.Enrichers.Thread.dll" />
+			</Component>
+			<Component>
+				<File Source="Serilog.Sinks.Async.dll" />
+			</Component>
+			<Component>
+				<File Source="Serilog.Sinks.Console.dll" />
+			</Component>
+			<Component>
+				<File Source="Serilog.Sinks.File.dll" />
+			</Component>
+			<Component>
+				<File Source="System.CodeDom.dll" />
+			</Component>
+			<Component>
+				<File Source="System.Diagnostics.DiagnosticSource.dll" />
+			</Component>
+			<Component>
+				<File Source="System.Diagnostics.EventLog.dll" />
+			</Component>
+			<Component>
+				<File Source="System.IO.Pipelines.dll" />
+			</Component>
+			<Component>
+				<File Source="System.IO.Ports.dll" />
+			</Component>
+			<Component>
+				<File Source="System.Management.dll" />
+			</Component>
+			<Component>
+				<File Source="System.Text.Encodings.Web.dll" />
+			</Component>
+			<Component>
+				<File Source="System.Text.Json.dll" />
+			</Component>
+			<Component>
+				<File Source="ultilities.dll" />
+			</Component>
+			<Component>
+				<File Source="WinUSBNet.dll" />
+			</Component>
+			<Component>
+				<File Source="Xa1700_Sharp.dll" />
+			</Component>
+			<Component>
+				<File Source="XA1700.dll" />
+			</Component>
+			<Component>
+				<File Source="ControlzEx.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.BoxIcons2.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.FontAwesome5.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.FontAwesome6.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.KeyruneIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.MingCuteIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="MahApps.Metro.IconPacks.MynaUIIcons.dll" />
+			</Component>
+			<Component>
+				<File Source="HarfBuzzSharp.dll" />
+			</Component>
+			<Component>
+				<File Source="InTheHand.BluetoothLE.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.Windows.SDK.NET.dll" />
+			</Component>
+			<Component>
+				<File Source="OxyPlot.SkiaSharp.dll" />
+			</Component>
+			<Component>
+				<File Source="OxyPlot.SkiaSharp.Wpf.dll" />
+			</Component>
+			<Component>
+				<File Source="SkiaSharp.dll" />
+			</Component>
+			<Component>
+				<File Source="SkiaSharp.HarfBuzz.dll" />
+			</Component>
+			<Component>
+				<File Source="SkiaSharp.Views.Desktop.Common.dll" />
+			</Component>
+			<Component>
+				<File Source="WinRT.Runtime.dll" />
+			</Component>
+			<Component>
+				<File Source="EasyModbus.dll" />
+			</Component>
+			<Component>
+				<File Source="ICSharpCode.AvalonEdit.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.CodeAnalysis.CSharp.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.CodeAnalysis.CSharp.Scripting.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.CodeAnalysis.dll" />
+			</Component>
+			<Component>
+				<File Source="Microsoft.CodeAnalysis.Scripting.dll" />
+			</Component>
+			<Component>
+				<File Source="System.Collections.Immutable.dll" />
+			</Component>
+			<Component>
+				<File Source="System.Reflection.Metadata.dll" />
+			</Component>
+			<Component>
+				<File Source=".\tr\Microsoft.CodeAnalysis.CSharp.resources.dll" />
+			</Component>
+			<Component>
+				<File Source=".\tr\Microsoft.CodeAnalysis.CSharp.Scripting.resources.dll" />
+			</Component>
+			<Component>
+				<File Source=".\tr\Microsoft.CodeAnalysis.resources.dll" />
+			</Component>
+			<Component>
+				<File Source=".\tr\Microsoft.CodeAnalysis.Scripting.resources.dll" />
+			</Component>
+			<Component>
+				<File Source=".\de\MahApps.Metro.resources.dll" />
+			</Component>
+			<Component>
+				<File Source=".\runtimes\win-x64\native\libHarfBuzzSharp.dll" />
+			</Component>
+			<Component>
+				<File Source=".\runtimes\win-x64\native\libSkiaSharp.dll" />
+			</Component>
+		
+		</ComponentGroup>
+
+		<ComponentGroup Id="Runtimes" Directory="RUNTIMESFOLDER">
+			<Component>
+				<File Source=".\runtimes\win\lib\net8.0\System.Management.dll" />
+			</Component>
+			<Component>
+				<File Source=".\runtimes\win\lib\net8.0\System.Diagnostics.EventLog.dll" />
+			</Component>
+			<Component>
+				<File Source=".\runtimes\win\lib\net8.0\System.Diagnostics.EventLog.Messages.dll" />
+			</Component>
+			<Component>
+				<File Source=".\runtimes\win\lib\net8.0\System.IO.Ports.dll" />
+			</Component>
+		</ComponentGroup>
+
+
+	  <!--<ComponentGroup Id="De" Directory="DEFOLDER">
+		  <Component>
+			  <File Source=".\runtimes\win\lib\net8.0\System.IO.Ports.dll" />
+		  </Component>
+	  </ComponentGroup>-->
+
+
+  </Fragment>
+</Wix>

@@ -1,0 +1,72 @@
+﻿<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:TestingSoftware.Converters">
+
+
+    <local:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+
+    <local:BooleanNegationConverter x:Key="BooleanNegationConverter" />
+
+
+    <Style x:Key="xRadioButton" TargetType="{x:Type RadioButton}">
+        <Setter Property="Foreground" Value="#333333" />
+        <!--  文本颜色  -->
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Margin" Value="0,0,15,0" />
+        <!--  按钮间间距  -->
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type RadioButton}">
+                    <!--  横向排列：单选按钮 + 文本  -->
+                    <StackPanel
+                        Height="22"
+                        VerticalAlignment="Center"
+                        Orientation="Horizontal">
+                        <!--  单选按钮本体（圆形）  -->
+                        <Border
+                            x:Name="RadioBorder"
+                            Width="16"
+                            Height="16"
+                            Margin="0,0,6,0"
+                            Background="White"
+                            BorderBrush="#CCCCCC"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                            <!--  与文本间距  -->
+                            <!--  选中状态的内圈  -->
+                            <Ellipse
+                                x:Name="CheckInner"
+                                Width="8"
+                                Height="8"
+                                Fill="#2196F3"
+                                Visibility="{TemplateBinding IsChecked,
+                                                             Converter={StaticResource BoolToVisibilityConverter}}" />
+                        </Border>
+
+                        <!--  文本内容（直接显示，无遮挡）  -->
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            FontSize="{TemplateBinding FontSize}"
+                            Foreground="{TemplateBinding Foreground}"
+                            Text="{TemplateBinding Content}" />
+                    </StackPanel>
+
+                    <!--  交互反馈触发器  -->
+                    <ControlTemplate.Triggers>
+                        <!--  鼠标悬停  -->
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="RadioBorder" Property="BorderBrush" Value="#2196F3" />
+                        </Trigger>
+                        <!--  禁用状态  -->
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="RadioBorder" Property="BorderBrush" Value="#EEEEEE" />
+                            <Setter TargetName="CheckInner" Property="Fill" Value="#BBBBBB" />
+                            <Setter Property="Foreground" Value="#BBBBBB" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

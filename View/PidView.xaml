@@ -1,0 +1,122 @@
+﻿<UserControl
+    x:Class="TestingSoftware.View.PidView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="clr-namespace:TestingSoftware.View"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    d:Background="White"
+    d:DesignHeight="450"
+    d:DesignWidth="800"
+    Loaded="PidLoaded"
+    mc:Ignorable="d">
+    <Grid x:Name="rootGrid">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <!--  TabControl 占用剩余空间  -->
+        </Grid.RowDefinitions>
+
+        <!--#region  信号-->
+        <Grid Grid.Row="0" Margin="10">
+            <!--  改这里  -->
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <!--  ListView 占满剩余空间  -->
+                <RowDefinition Height="Auto" />
+                <!--  按钮放在底部  -->
+            </Grid.RowDefinitions>
+
+
+            <ListView AllowDrop="True" ItemsSource="{Binding SignalsView}">
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Width="100" Header="Id">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Id, StringFormat=0x{0:X4}}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Width="150" Header="Name">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Width="200" Header="Value">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBox 
+                                        Width="170"
+                                        VerticalAlignment="Center"
+                                        Text="{Binding Text, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Width="150" Header="Unit">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Unit}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Width="100" Header="Type">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Type}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Width="300" Header="Description">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Description}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                        <GridViewColumn Width="auto" Header="operation">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button
+                                            Width="100"
+                                            Command="{Binding DataContext.ReadSigCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                            CommandParameter="{Binding}"
+                                            Content="Read"
+                                            Style="{StaticResource xButton}" />
+                                        <Button
+                                            Width="100"
+                                            Command="{Binding DataContext.WriteSigCommand, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                            CommandParameter="{Binding}"
+                                            Content="Write"
+                                            Style="{StaticResource xButton}" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+            <StackPanel
+                Grid.Row="1"
+                Margin="0,5,5,0"
+                HorizontalAlignment="Right"
+                Orientation="Horizontal">
+                <Button
+                    Width="100"
+                    Command="{Binding RestoreDefault}"
+                    CommandParameter="FWC"
+                    Content="默认值"
+                    Style="{StaticResource xButton}" />
+                <Button
+                    Width="100"
+                    Command="{Binding ReadAllSignals}"
+                    CommandParameter="FWC"
+                    Content="读取全部"
+                    Style="{StaticResource xButton}" />
+            </StackPanel>
+        </Grid>
+
+    </Grid>
+</UserControl>

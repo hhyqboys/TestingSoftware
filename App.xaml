@@ -1,0 +1,22 @@
+﻿<Application
+    x:Class="TestingSoftware.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:TestingSoftware">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/MahApps.Metro;component/Styles/Controls.xaml" />
+                <ResourceDictionary Source="pack://application:,,,/MahApps.Metro;component/Styles/Themes/Light.blue.xaml" />
+
+                <ResourceDictionary Source="/Theme/Button.xaml" />
+                <ResourceDictionary Source="/Theme/ComboBox.xaml" />
+                <ResourceDictionary Source="/Theme/GroupBox.xaml" />
+                <ResourceDictionary Source="/Theme/TextBlock.xaml" />
+                <ResourceDictionary Source="/Theme/TabControl.xaml" />
+                <ResourceDictionary Source="/Theme/MenuItem.xaml" />
+                <ResourceDictionary Source="/Theme/XRadioButton.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
