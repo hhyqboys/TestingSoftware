@@ -14,7 +14,6 @@ namespace TestingSoftware.Models
         /// <summary>
         /// 是否显示配置页面
         /// </summary>
-        public bool IsShowPidView { get; set; } = false;
         /// <summary>
         /// 界面标题 xml加载
         /// </summary>
@@ -23,6 +22,12 @@ namespace TestingSoftware.Models
 
         public string SnWildcard { get; set; } = "^MSM\\d{4}\\d{6}\\d\\d{5}$";
         public string DefaultSN { get; set; } = string.Empty;
+
+
+        /// <summary>
+        /// 是否显示控制台页面
+        /// </summary>
+        public bool IsConsole { get; set; } = false;
         /// <summary>
         /// RSHUNT (R value of shunt)
         /// </summary>

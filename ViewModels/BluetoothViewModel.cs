@@ -7,6 +7,7 @@
 using Serilog;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -35,7 +36,10 @@ namespace TestingSoftware.ViewModels
         }
 
 
-        public EventHandler BluetoothDeviceFound;
+        // 新增①：扫描状态事件（true=开始扫描，false=扫描结束）
+        public event EventHandler<bool>? ScanStateChanged;
+        // 新增②：列表就绪事件（保留原事件，但调用处必须 ?.Invoke 防空引用）
+        public event EventHandler? BluetoothDeviceFound;
         /// <summary>
         /// Gets or sets the list of Bluetooth addresses.
         /// </summary>
@@ -49,15 +53,7 @@ namespace TestingSoftware.ViewModels
             }
         }
 
-        public List<BluetoothInfo> SlaveDevices
-        {
-            get => _slaveDevices;
-            set
-            {
-                _slaveDevices = value;
-                OnPropertyChanged(nameof(SlaveDevices));
-            }
-        }
+        public ObservableCollection<BluetoothInfo> SlaveDevices { get; } = new ObservableCollection<BluetoothInfo>();
 
         public BluetoothInfo SelectedSlaveDevInfo
         {
@@ -114,7 +110,6 @@ namespace TestingSoftware.ViewModels
 
         private bool _isEditable = false;
         private List<BluetoothInfo> _bluetoothAddresses = new List<BluetoothInfo>();
-        private List<BluetoothInfo> _slaveDevices = new List<BluetoothInfo>();
         private BluetoothInfo _selectedSlaveDevInfo = new BluetoothInfo();
 
 
@@ -137,7 +132,7 @@ namespace TestingSoftware.ViewModels
             };
 
         }
-        
+
         private void OnAdvertisementReceivedNoCHange(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementReceivedEventArgs args) { }
         private void OnAdvertisementReceived(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementReceivedEventArgs args)
         {
@@ -159,7 +154,7 @@ namespace TestingSoftware.ViewModels
                 .Reverse()
                 .Take(8)
                 .Select(b => b.ToString("X2")));
-
+            Log.Information($"发现设备：{deviceName}，地址：{addressStr}，蓝牙地址：{btAddress}，信号强度：{Rssi}");
             var info = new BluetoothInfo
             {
                 Name = deviceName,
@@ -167,93 +162,80 @@ namespace TestingSoftware.ViewModels
                 BluetoothAddress = btAddress,
                 //Rssi = Rssi
             };
-
-            // 去重：若地址已存在，则不重复添加
-           if (!SlaveDevices.Any(d => d.BluetoothAddress == btAddress))
+            Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                // 去重：若地址已存在，则不重复添加
+                if (!SlaveDevices.Any(d => d.BluetoothAddress == btAddress))
                 {
-                    SlaveDevices.Add(info);
-
-                    if (info.BluetoothAddress == SelectedSlaveDevInfo?.BluetoothAddress)
-                    {
-                        SelectedSlaveDevInfo = info;
-                    }
+                    SlaveDevices.Add(info);   // ObservableCollection 自动通知 UI
                 }
+            });
         }
 
         private void OnAdvertisementWatcherStopped(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementWatcherStoppedEventArgs args)
         {
-            if (_watcher == null) return;
-            if (!_noChangeScan)
+            // 用 sender 而不是 _watcher 字段，避免新旧 watcher 串台
+            if (sender == null) return;
+
+            sender.Received -= OnAdvertisementReceived;
+            sender.Stopped -= OnAdvertisementWatcherStopped;
+
+            // 只有当前触发的就是活跃 watcher 才清字段
+            if (ReferenceEquals(_watcher, sender))
             {
-                _watcher.Received -= OnAdvertisementReceived;
-
+                _watcher = null;
+                IsScanning = true;
             }
-            else
-            {
 
-                _watcher.Received -= OnAdvertisementReceivedNoCHange;
-            }
-            _watcher.Stopped -= OnAdvertisementWatcherStopped;
-            if (!_noChangeScan)
-            {
-                OnPropertyChanged(nameof(SlaveDevices));
-                OnPropertyChanged(nameof(SelectedSlaveDevInfo));
-            }
-            _watcher = null;
-            IsScanning = true;
-
-
+            BluetoothDeviceFound?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>
-        ///This function uses the selected Bluetooth SelectedDevInfo to scan attached Bluetooth devices
-        /// </summary>
-        public ICommand ScanAction => new SyncCommand(sender =>
+        public async Task<bool> ScanAction()
         {
+            if (!IsScanning) return false;
+            _noChangeScan = false;
 
-            _ = Task.Run(async () =>
+            // 先把旧的停干净，等 Stopped 事件走完
+            if (_watcher != null)
             {
-                if (!IsScanning)
-                {
-                    // 停止扫描
-                    _watcher?.Stop();
-                    IsScanning = true;
-                    return;
-                }
-                // 初始化 BLE 广告监视器
-                _watcher = new BluetoothLEAdvertisementWatcher
-                {
-                    ScanningMode = BluetoothLEScanningMode.Active  // Active 模式可获取更多数据，包括名称
-                };
+                try { _watcher.Stop(); } catch { }
+                _watcher.Received -= OnAdvertisementReceived;
+                _watcher.Stopped -= OnAdvertisementWatcherStopped;
+                _watcher = null;
+            }
 
-                _watcher.Received += OnAdvertisementReceived;
-                _watcher.Stopped += OnAdvertisementWatcherStopped;
-                try
-                {
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        SlaveDevices = new List<BluetoothInfo>();
-                        OnPropertyChanged(nameof(SlaveDevices));
-                    });
+            IsScanning = false;
+            ScanStateChanged?.Invoke(this, true);
 
-                    IsScanning = false;
-
-                    _watcher.Start();
-                    await Task.Delay(3000);  // 扫描 5 秒
-                    if (!IsScanning)  // 若用户未手动停止，则自动停止
-                    {
-                        _watcher.Stop();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // 处理异常（如蓝牙未开启）
-                    Log.Debug($"扫描失败：{ex.Message}");
-                    IsScanning = true;
-                }
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                SlaveDevices.Clear();
+                SelectedSlaveDevInfo = null;
             });
-        });
 
+            _watcher = new BluetoothLEAdvertisementWatcher
+            {
+                ScanningMode = BluetoothLEScanningMode.Active
+            };
+            _watcher.Received += OnAdvertisementReceived;
+            _watcher.Stopped += OnAdvertisementWatcherStopped;
+
+            try
+            {
+                _watcher.Start();
+                await Task.Delay(10_000);
+                if (!IsScanning && _watcher != null)
+                {
+                    _watcher.Stop();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"扫描失败：{ex.Message}");
+                IsScanning = true;
+            }
+            return true;
+        }
         /// <summary>
         ///This function uses the selected Bluetooth SelectedDevInfo to scan attached Bluetooth devices
         /// </summary>

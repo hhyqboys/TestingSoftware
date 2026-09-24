@@ -10,6 +10,7 @@
     xmlns:view="clr-namespace:TestingSoftware.View"
     Width="1200"
     Height="600"
+    Icon="pack://application:,,,/Resources/ElectricControl.ico"
     mc:Ignorable="d">
     <Window.Resources>
         <conv:EmptyStringConverter x:Key="EmptyStringConverter" />
@@ -28,6 +29,96 @@
             <Style.Triggers>
                 <Trigger Property="IsEnabled" Value="False">
                     <Setter Property="Foreground" Value="#808080" />
+                </Trigger>
+            </Style.Triggers>
+
+        </Style>
+        <!--  禁用时：背景灰色、边框白色  -->
+        <!--  禁用时：背景灰色、边框白色  -->
+        <Style x:Key="DisabledComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Foreground" Value="Black" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid x:Name="templateRoot" SnapsToDevicePixels="true">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <!--  下拉列表  -->
+                            <Popup
+                                x:Name="PART_Popup"
+                                Grid.ColumnSpan="2"
+                                Margin="1"
+                                AllowsTransparency="true"
+                                IsOpen="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                Placement="Bottom">
+                                <Border
+                                    MinWidth="{Binding ActualWidth, ElementName=templateRoot}"
+                                    MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                    Background="White"
+                                    BorderBrush="#ACACAC"
+                                    BorderThickness="1">
+                                    <ScrollViewer>
+                                        <ItemsPresenter />
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+
+                            <!--  可点击主体  -->
+                            <ToggleButton
+                                x:Name="toggleButton"
+                                Grid.ColumnSpan="2"
+                                ClickMode="Press"
+                                Focusable="False"
+                                IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border
+                                            x:Name="Chrome"
+                                            Background="White"
+                                            BorderBrush="#ACACAC"
+                                            BorderThickness="1"
+                                            CornerRadius="5"
+                                            SnapsToDevicePixels="true">
+                                            <Path
+                                                x:Name="arrow"
+                                                Width="6"
+                                                Height="4"
+                                                Margin="0,0,10,0"
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Center"
+                                                Data="M 0,0 L 3,3 L 6,0 Z"
+                                                Fill="#606060" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <!--  禁用时：IsEnabled 会从 ComboBox 继承到这里  -->
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter TargetName="Chrome" Property="Background" Value="#000" />
+                                                <Setter TargetName="Chrome" Property="BorderBrush" Value="red" />
+                                                <Setter TargetName="arrow" Property="Fill" Value="#BFBFBF" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+
+                            <!--  显示选中项  -->
+                            <ContentPresenter
+                                Margin="8,0,24,0"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Center"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                IsHitTestVisible="False" />
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#888888" />
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -132,8 +223,7 @@
                     BorderThickness="0"
                     Command="{Binding ScanSerialAction}"
                     FontSize="20"
-                    ToolTip="Scan"
-                    Visibility="{Binding IsShowPidView, Converter={StaticResource BoolFalseToVisibilityConverter}}">
+                    ToolTip="Scan">
                     <StackPanel Orientation="Horizontal">
                         <icon:PackIconOcticons
                             Width="25"
@@ -143,20 +233,22 @@
                         <TextBlock Margin="4,0,0,0" Text="扫描" />
                     </StackPanel>
                 </Button>
-                <StackPanel DataContext="{Binding BluetoothViewAdapter}" Orientation="Horizontal">
+                <StackPanel Orientation="Horizontal">
                     <TextBlock
                         Margin="5"
                         VerticalAlignment="Center"
                         FontSize="20"
                         Text="测试设备:" />
                     <ComboBox
-                        MinWidth="50"
+                        MinWidth="100"
+                        MinHeight="50"
                         Margin="5"
                         VerticalAlignment="Center"
                         FontSize="20"
                         IsEnabled="{Binding IsScanning}"
                         ItemsSource="{Binding SlaveDevices}"
-                        SelectedItem="{Binding SelectedSlaveDevInfo}" />
+                        SelectedItem="{Binding SelectedSlaveDevInfo}"
+                        Style="{StaticResource DisabledComboBoxStyle}" />
                     <Button
                         Width="100"
                         Height="50"

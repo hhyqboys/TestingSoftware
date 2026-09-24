@@ -144,7 +144,7 @@ namespace TestingSoftware.ViewModels
                 Pdu request;
                 Pdu? response;
 
-                var success = await _securityService.UnlockMCUAsync();
+                var success = await _securityService.UnlockMCUNoPopAsync();
                 if (!success)
                 {
                     _currentJob.Status = -1;

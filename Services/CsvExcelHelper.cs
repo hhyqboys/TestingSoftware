@@ -59,7 +59,7 @@ namespace TestingSoftware.Services
                 if (!File.Exists(_filePath))
                 {
                     // 表头：时间、芯片ID、设备SN、测试名称、测试结果
-                    string header = "时间,设备芯片ID,设备SN,测试名称,测试结果";
+                    string header = "时间,蓝牙地址,设备SN,测试结果,说明";
                     File.WriteAllText(_filePath, header + Environment.NewLine, Encoding.UTF8);
                 }
 
@@ -85,7 +85,7 @@ namespace TestingSoftware.Services
         /// <param name="sn">设备SN</param>
         /// <param name="testName">测试名称</param>
         /// <param name="testResult">测试结果</param>
-        public void Update(string chipId, string sn)
+        public void Update(string chipId, string sn,bool testResult,string? describe)
         {
             if (!_isInitialized)
             {
@@ -96,17 +96,27 @@ namespace TestingSoftware.Services
             string time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
 
             // 拼接CSV行数据（处理逗号特殊字符，避免格式错乱）
-            string dataLine = $"{EscapeCsvValue(time)},{EscapeCsvValue(chipId)},{EscapeCsvValue(sn)}";
+            var sb = testResult ? "通过" : "失败";
+            string dataLine;
+            if (!string.IsNullOrEmpty(describe))
+            {
+                dataLine = $"{EscapeCsvValue(time)},{EscapeCsvValue(chipId)},{EscapeCsvValue(sn)} ,{sb},{describe}";
+            }
+            else
+            {
+                dataLine = $"{EscapeCsvValue(time)},{EscapeCsvValue(chipId)},{EscapeCsvValue(sn)} ,{sb}";
+            }
+             
 
             // 加入线程安全队列
             _dataQueue.Enqueue(dataLine);
         }
         #endregion
 
-        #region 异步定时保存核心逻辑
-        /// <summary>
-        /// 启动自动保存计时器
-        /// </summary>
+            #region 异步定时保存核心逻辑
+            /// <summary>
+            /// 启动自动保存计时器
+            /// </summary>
         private void StartAutoSaveTimer()
         {
             _saveTimer = new System.Timers.Timer(_saveInterval);

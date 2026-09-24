@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Forms;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Xml.Serialization;
 using TestingSoftware.Adapters;
 using TestingSoftware.Commands;
@@ -29,7 +30,7 @@ namespace TestingSoftware.ViewModels
         public const int JOB_RUNNING = 1;   // 测试中
         public const int JOB_PASS = 2;   // 通过
         public const int JOB_FAIL = -1;  // 失败（终态，落库）
-        public const int JOB_RETRYING = -2;  // 失败但可重试（不落库）
+        public const int JOB_RETRYING = -2;  // 失败但可重试
         public const int JOB_STOPPED = -3;  // 手动停止
 
         public const UInt16 SERIAL_NUM = 0xF18d;
@@ -58,6 +59,8 @@ namespace TestingSoftware.ViewModels
         /// The bluetooth view model.
         /// </summary>
         public SumartBluetoothAdapter BluetoothAdapter { get; set; } = new SumartBluetoothAdapter();
+
+        private readonly CsvExcelHelper _csvHelper = new CsvExcelHelper();
 
 
         private readonly IDeviceTestRecordService _testRecordService;
@@ -181,6 +184,8 @@ namespace TestingSoftware.ViewModels
             set
             {
                 _status = value;
+                Log.Debug($"Status changed to {_status}");
+                ChangeUI();
                 OnPropertyChanged(nameof(Status));
             }
         }
@@ -190,22 +195,7 @@ namespace TestingSoftware.ViewModels
         //private LineConfigPageViewModel _lineConfigPageView;
 
 
-        //public LineConfigPageViewModel Line
-        //{
-        //    get => _lineConfigPageView;
-        //}
-        /// <summary>
-        /// 
-        /// </summary>
-        public bool IsShowPidView
-        {
-            get => Model.IsShowPidView;
-            set
-            {
-                Model.IsShowPidView = value;
-                OnPropertyChanged(nameof(IsShowPidView));
-            }
-        }
+
 
         /// <summary>
         /// Controls connect button enabled/disabled state, triggers property change
@@ -229,6 +219,19 @@ namespace TestingSoftware.ViewModels
         private string _reTestSn = string.Empty;
         private string _testStatusInfo = string.Empty;
         private int _status = 0;
+        private List<BluetoothInfo>? _slaveDevices;
+        private BluetoothInfo _selectedSlaveDevInfo;
+
+
+        // 测试中状态：JOB_RUNNING(1) 或 JOB_RETRYING(-2)
+        private bool IsTesting => Status == JOB_RUNNING || Status == JOB_RETRYING;
+
+        // 设备已连接
+        private bool IsDeviceConnected => BluetoothViewAdapter?.Running == true;
+
+        // 可复测：上一轮以失败(-1)或手动停止(-3)结束
+        private bool CanRetest => !IsTesting && (Status == JOB_FAIL || Status == JOB_STOPPED);
+
 
         /// <summary>
         /// 构造Serializer，传入所有DiagService派生类型
@@ -242,15 +245,81 @@ namespace TestingSoftware.ViewModels
             }
             return _modelSerializer;
         }
-        #endregion
+        private bool _isScanning = true;   
+        public bool IsScanning
+        {
+            get => _isScanning;
+            set { _isScanning = value; OnPropertyChanged(nameof(IsScanning)); }
+        }
 
+
+        public ObservableCollection<BluetoothInfo> SlaveDevices { get; } = new ObservableCollection<BluetoothInfo>();
+
+        public BluetoothInfo SelectedSlaveDevInfo
+        {
+            get => _selectedSlaveDevInfo ?? new BluetoothInfo();
+            set
+            {
+                _selectedSlaveDevInfo = value;
+                BluetoothViewAdapter.SelectedSlaveDevInfo = value;
+                OnPropertyChanged(nameof(SelectedSlaveDevInfo));
+            }
+        }
+        #endregion
+        /// <summary>
+        /// 获取 AppData\Roaming\ElectricControl 路径，不存在则创建，返回绝对路径
+        /// </summary>
+        /// <returns>绝对路径</returns>
+        public static string GetElectricControlFolder()
+        {
+            // 获取当前用户 AppData\Roaming
+            string roamingPath = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+            // 拼接目标路径
+            string targetFolder = Path.Combine(roamingPath, "ElectricControl");
+
+            // 如果不存在则创建
+            if (!Directory.Exists(targetFolder))
+            {
+                Directory.CreateDirectory(targetFolder);
+            }
+
+            // 返回绝对路径
+            return targetFolder;
+        }
         public TestingSoftwareViewModel(BluetoothViewModel sumartBluetoothAdapter,
              UdsService udsService, ModBusService modBusService,
              IDeviceTestRecordService testRecordService)
         {
             _udsService = udsService;
+            _csvHelper.Init(GetElectricControlFolder() + "\\SN设备映射表.csv");
             _modBusService = modBusService;
             BluetoothViewAdapter = sumartBluetoothAdapter;
+            BluetoothViewAdapter = sumartBluetoothAdapter;
+            BluetoothViewAdapter.ScanStateChanged += (s, started) =>
+            {
+                Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    IsScanning = !started;   // 语义与蓝牙VM一致：扫描中=false，空闲=true
+                });
+            };
+            BluetoothViewAdapter.BluetoothDeviceFound += async (s, e) =>
+            {
+                await Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    SlaveDevices.Clear();
+                    foreach (var dev in BluetoothViewAdapter.SlaveDevices)
+                    {
+                        SlaveDevices.Add(dev);
+                    }
+                    SelectedSlaveDevInfo = BluetoothViewAdapter.SelectedSlaveDevInfo;
+                    IsScanning = BluetoothViewAdapter.IsScanning;
+                    OnPropertyChanged(nameof(SelectedSlaveDevInfo));
+                    OnPropertyChanged(nameof(IsScanning));
+                });
+            };
+
+
             _mcuSecurityService = new McuSecurityService(_udsService);
             //_lineConfigPageView = lineConfigPageView;
             _selectedSerialPort = Properties.Settings.Default.LastSerialPort;
@@ -269,9 +338,7 @@ namespace TestingSoftware.ViewModels
                     await Application.Current.Dispatcher.InvokeAsync(() =>
                     {
                         App.isPause = false;
-                        BluetoothViewAdapter.Running = false;
-                        ConnectionLabel = "链接";
-                        IsConnectButtonEnabled = false;
+                        SetConnectionState(false);
                         Log.Error(
                             "蓝牙连接意外断开，请检查蓝牙状态后重新连接！!",
                             "蓝牙断开",
@@ -371,8 +438,21 @@ namespace TestingSoftware.ViewModels
                     }
                 }
             }
-            OnPropertyChanged(nameof(IsShowPidView));
+            if (loadedModel.IsConsole)
+            {
+                Application.Current.Dispatcher.InvokeAsync(() =>
+               {
+                   ConsoleWindow.Show();
+               });
+            }
+            else
+            {
+                Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    ConsoleWindow.Hide();
+                });
 
+            }
             // 成功加载，保存路径到用户配置
             Properties.Settings.Default.LastProjectPath = filePath;
             Properties.Settings.Default.Save();
@@ -391,6 +471,17 @@ namespace TestingSoftware.ViewModels
             }
         }
 
+        public void ChangeUI()
+        {
+            App.Current.Dispatcher.InvokeAsync(() =>
+            {
+                OnPropertyChanged(nameof(ConnectAction));
+                OnPropertyChanged(nameof(ScanSerialAction));
+                OnPropertyChanged(nameof(StopJobAction));
+                OnPropertyChanged(nameof(StartJobAction));
+                OnPropertyChanged(nameof(RetestJobAction));
+            });
+        }
         /// <summary>
         /// The method is to connect to a Bluetooth device.
         /// </summary>
@@ -411,22 +502,12 @@ namespace TestingSoftware.ViewModels
 
                 // Disconnect the uart after closing all modules which dependent on the uart.
                 result = await DisconnectAsync();
-                if (result == 0)
-                {
-                    BluetoothViewAdapter.Running = false;
-                    ConnectionLabel = "链接";
-                    IsConnectButtonEnabled = false;
-                }
+                if (result == 0) SetConnectionState(false);
             }
             else
             {
                 result = await ConnectAsync();
-                if (result == 0)
-                {
-                    BluetoothViewAdapter.Running = true;
-                    ConnectionLabel = "断开";
-                    IsConnectButtonEnabled = true;
-                }
+                if (result == 0) SetConnectionState(true);
             }
 
             if (result != 0)
@@ -434,6 +515,17 @@ namespace TestingSoftware.ViewModels
                 Status = -1;
                 TestStatusInfo = $"设备打开关闭失败";
             }
+            ChangeUI();
+        });
+        
+        /// <summary>
+        /// The method is to connect to a Bluetooth device.
+        /// </summary>
+        public ICommand ScanAction => new AsyncCommand(async p =>
+        {
+
+            await BluetoothViewAdapter.ScanAction();
+
         });
 
         /// <summary>
@@ -568,12 +660,19 @@ namespace TestingSoftware.ViewModels
             string pattern = Model.SnWildcard;
             return Regex.IsMatch(sn, pattern);
         }
-
+        private void SetConnectionState(bool connected)
+        {
+            BluetoothViewAdapter.Running = connected;
+            ConnectionLabel = connected ? "断开" : "链接";
+            IsConnectButtonEnabled = connected;
+            ChangeUI();   // ← 关键：刷新开始/停止/复测
+        }
         /// <summary>
         /// 开始测试
         /// </summary>
         public ICommand StartJobAction => new AsyncCommand(async sender =>
         {
+            ChangeUI();
             Status = 1;
             TestStatusInfo = "开始测试";
             _jobCts?.Cancel();
@@ -600,14 +699,12 @@ namespace TestingSoftware.ViewModels
                 var result = await ConnectAsync();
                 if (result == 0)
                 {
-                    BluetoothViewAdapter.Running = true;
-                    ConnectionLabel = "断开";
-                    IsConnectButtonEnabled = true;
+                    SetConnectionState(true);
                 }
                 else
                 {
                     Status = -1;
-                    TestStatusInfo = $"自动连接电控设备失败";
+                    TestStatusInfo = "自动连接电控设备失败";
                     return;
                 }
             }
@@ -630,9 +727,15 @@ namespace TestingSoftware.ViewModels
             await _udsService.StartAsync();
             _jobMainTask = Task.Run(async () =>
             {
+                //恢复所有测试项的job的初始状态
+                foreach (var _job in VisibleJobs)
+                {
+                    JobStatusChanged(_job, JOB_IDLE, string.Empty);
+                }
                 await RunTestLogic(token);
+                _jobCts?.Cancel();
             }, token);
-        });
+        }, _ => IsDeviceConnected && !IsTesting);
 
         private int ExecuCan(Job job, CancellationToken token)
         {
@@ -798,13 +901,15 @@ namespace TestingSoftware.ViewModels
             _job3E80Cts = null;
             _jobMainTask = null;
             _job3ETask = null;
-        });
+            ChangeUI();
+        }, _ => IsDeviceConnected && IsTesting);
 
         /// <summary>
         /// 重新测试
         /// </summary>
         public ICommand RetestJobAction => new AsyncCommand(async sender =>
         {
+            ChangeUI();
             Status = 1;
             TestStatusInfo = "复测开始";
 
@@ -841,14 +946,17 @@ namespace TestingSoftware.ViewModels
 
             if (!BluetoothViewAdapter.Running)
             {
-                ConnectAction.Execute(null);
-                var i = 0;
-                do
+                var result = await ConnectAsync();
+                if (result == 0)
                 {
-                    await Task.Delay(1000, token);
-                    if (Status == -1) return;
-                    i++;
-                } while (i < 5);
+                    SetConnectionState(true);
+                }
+                else
+                {
+                    Status = -1;
+                    TestStatusInfo = "自动连接电控设备失败";
+                    return;
+                }
             }
 
             if (!_modBusService.IsRunning)
@@ -873,8 +981,9 @@ namespace TestingSoftware.ViewModels
             _jobMainTask = Task.Run(async () =>
             {
                 await RunTestLogic(token);
+                _jobCts?.Cancel();
             }, token);
-        });
+        }, _ => IsDeviceConnected && CanRetest);
         /// <summary>
         /// 公共测试执行逻辑：【正常测试 / 复测】共用
         /// 重试闭环：失败→(可重试)JOB_RETRYING→延时→恢复JOB_RUNNING重跑→成功JOB_PASS / 耗尽JOB_FAIL
@@ -884,66 +993,64 @@ namespace TestingSoftware.ViewModels
         {
             try
             {
-                //恢复所有测试项的job的初始状态
-                foreach (var _job in VisibleJobs)
+                _job3E80Cts?.Cancel();
+                _job3E80Cts?.Dispose();
+                if (_job3ETask != null) await _job3ETask;
+                _job3ETask = null;
+                _job3E80Cts = new CancellationTokenSource();
+                token3E80 = _job3E80Cts.Token;
+
+                //发送3E80维持会话,在这个job结束后,3E80停止发送
+                _job3ETask = Task.Run(async () =>
                 {
-                    JobStatusChanged(_job, JOB_IDLE, string.Empty);
-                }
+                    try
+                    {
+                        if (_udsService.Running)
+                        {
+                            await _mcuSecurityService.UnlockMCUNoPopAsync();
+                            var _securityService = new McuSecurityService(_udsService);
+                            var startTime = HighResolutionTimer.Milliseconds;
+                            while (_udsService.Running && !token3E80.IsCancellationRequested)
+                            {
+                                if (HighResolutionTimer.Milliseconds - startTime > 3_500)
+                                {
+                                    startTime = HighResolutionTimer.Milliseconds;
+                                    Service3e service3e = new Service3e();
+                                    service3e.SubFunction = service3e.SUPPRESS_RESPONSE;
+                                    await _udsService.Request(service3e.BuildRequest(), token3E80);
+                                }
+                                else
+                                {
+                                    await Task.Delay(100, token3E80);
+                                }
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        //正常停止
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "3E后台任务异常");
+                    }
+                }, token3E80);
+                await Task.Delay(1000, ct);
+
                 for (int jobIndex = 0; jobIndex < VisibleJobs.Count; jobIndex++)
                 {
                     var job = VisibleJobs[jobIndex];
+                  
                     // =========复测核心：下标小于起始下标，直接跳过不执行=========
                     if (jobIndex < _retestStartIndex)
                     {
                         Log.Information($"复测跳过已完成Job:{job.JobName}");
                         continue;
                     }
-                    _job3E80Cts?.Cancel();
-                    _job3E80Cts?.Dispose();
-                    if (_job3ETask != null) await _job3ETask;
-                    _job3ETask = null;
-                    _job3E80Cts = new CancellationTokenSource();
-                    token3E80 = _job3E80Cts.Token;
-                    if (ct.IsCancellationRequested) break;
-                    if (job.Keep3E80)
-                    {
-                        //发送3E80维持会话,在这个job结束后,3E80停止发送
-                        _job3ETask = Task.Run(async () =>
-                        {
-                            try
-                            {
-                                if (_udsService.Running)
-                                {
-                                    var _securityService = new McuSecurityService(_udsService);
-                                    var startTime = HighResolutionTimer.Milliseconds;
-                                    while (_udsService.Running && !token3E80.IsCancellationRequested)
-                                    {
-                                        if (HighResolutionTimer.Milliseconds - startTime > 5_000)
-                                        {
-                                            startTime = HighResolutionTimer.Milliseconds;
-                                            Service3e service3e = new Service3e();
-                                            service3e.SubFunction = service3e.SUPPRESS_RESPONSE;
-                                            await _udsService.Request(service3e.BuildRequest(), token3E80);
-                                        }
-                                        else
-                                        {
-                                            await Task.Delay(100, token3E80);
-                                        }
-                                    }
-                                }
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                //正常停止
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Error(ex, "3E后台任务异常");
-                            }
-                        }, token3E80);
-                    }
+
                     Log.Information($"执行任务开始:{job.JobName}");
                     JobStatusChanged(job, JOB_RUNNING);
+                    await Task.Delay(job.StartDelayTimeMs, ct);
                     if (job.IsCan)
                     {
                         int res = ExecuCan(job, ct);
@@ -979,6 +1086,8 @@ namespace TestingSoftware.ViewModels
                                     JobStatusChanged(job, JOB_STOPPED, "手动停止");
                                     failedThisRound = true;
                                     Log.Information($"任务终止:{job.JobName},手动停止");
+                                    _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},手动停止");
+
                                     break;
                                 }
                                 await Task.Delay(100, ct);
@@ -994,6 +1103,7 @@ namespace TestingSoftware.ViewModels
                                         case IoType.Di:
                                             bools = new bool[1];
                                             bools = _modBusService.ReadDiscreteInputs((byte)(signalDiagService.StartAddress - 1), (byte)(signalDiagService.Values.Length), signalDiagService.SlaveId);
+                                            Log.Debug($"返回值:{string.Join(",", bools.Select(x => x.ToString()))}");
                                             bool diAllMatch = true;
                                             for (int i = 0; i < signalDiagService.Values.Length; i++)
                                             {
@@ -1025,6 +1135,7 @@ namespace TestingSoftware.ViewModels
                                             break;
                                         case IoType.Ai:
                                             ushort[] _readdata = _modBusService.ReadAiRegisters(signalDiagService.StartAddress, (ushort)(signalDiagService.Length), signalDiagService.SlaveId);
+                                            Log.Debug($"返回值:{string.Join(",", _readdata.Select(x => x.ToString()))}");
                                             if (signalDiagService.Signals[0].Tolerance != 0 && signalDiagService.Signals[0].Expectation != null)
                                             {
                                                 if (_readdata[0] < (int)signalDiagService.Signals[0].Expectation - (int)signalDiagService.Signals[0].Tolerance || _readdata[0] > (int)signalDiagService.Signals[0].Expectation + (int)signalDiagService.Signals[0].Tolerance)
@@ -1032,6 +1143,7 @@ namespace TestingSoftware.ViewModels
                                                     bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                                     JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, signalDiagService.Signals[0].ErrorMsg);
                                                     failedThisRound = true;
+
                                                     Log.Information($"执行任务失败:{job.JobName}-{signalDiagService.Signals[0].Name},返回值不匹配");
                                                     break;
                                                 }
@@ -1104,10 +1216,12 @@ namespace TestingSoftware.ViewModels
                                             {
                                                 foreach (var signal in diagService.Signals)
                                                 {
+
                                                     if (failedThisRound) break;   // 信号失败后跳过剩余信号
                                                     var sigv = new SignalViewModel(signal);
                                                     if (sigv.Value != null)
                                                     {
+                                                        Log.Information($"{sigv.Name}:{sigv.Expectation} {sigv.Tolerance}");
                                                         switch (signal.Type)
                                                         {
                                                             case 0:
@@ -1178,9 +1292,11 @@ namespace TestingSoftware.ViewModels
                                         else
                                         {
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
-                                            JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"返回值不匹配");
+                                            JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"通讯失败");
                                             failedThisRound = true;
-                                            Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
+                                            _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},通讯失败");
+
+                                            Log.Information($"执行任务失败:{job.JobName},通讯失败");
                                             break;   // 跳出 foreach
                                         }
                                     }
@@ -1190,13 +1306,15 @@ namespace TestingSoftware.ViewModels
                                         var service2e = (Service2e)diagService;
                                         if (service2e.Signals[0].Id != 0x04)
                                         {
-                                            unlooked = await _mcuSecurityService.UnlockMCUAsync();
+                                            unlooked = await _mcuSecurityService.UnlockMCUNoPopAsync();
                                             if (!unlooked)
                                             {
                                                 bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                                 JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"解锁失败");
                                                 failedThisRound = true;
                                                 Log.Information($"执行任务失败:{job.JobName},解锁失败");
+                                                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},解锁失败");
+
                                                 break;   // 跳出 foreach
                                             }
                                         }
@@ -1211,6 +1329,8 @@ namespace TestingSoftware.ViewModels
                                                 JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"写入SN失败");
                                                 failedThisRound = true;
                                                 Log.Information($"执行任务失败:{job.JobName},读取默认SN失败");
+                                                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},读取默认SN失败");
+
                                                 break;
                                             }
                                             content = await ReadSn(Model.DefaultSN);
@@ -1219,6 +1339,8 @@ namespace TestingSoftware.ViewModels
                                                 bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                                 JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"写入SN失败");
                                                 failedThisRound = true;
+                                                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},写入SN失败");
+
                                                 Log.Information($"执行任务失败:{job.JobName},写入SN失败");
                                                 break;
                                             }
@@ -1226,6 +1348,7 @@ namespace TestingSoftware.ViewModels
                                             {
                                                 bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                                 JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"设备SN已写入与扫描SN不同");
+                                                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},设备SN已写入与扫描SN不同");
                                                 failedThisRound = true;
                                                 Log.Information($"执行任务失败:{job.JobName},设备SN已写入与扫描SN不同");
                                                 break;
@@ -1248,6 +1371,7 @@ namespace TestingSoftware.ViewModels
                                             {
                                                 bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                                 JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"解锁失败");
+                                                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},解锁失败");
                                                 failedThisRound = true;
                                                 Log.Information($"执行任务失败:{job.JobName},解锁失败");
                                                 break;
@@ -1301,6 +1425,7 @@ namespace TestingSoftware.ViewModels
                                             {
                                                 bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                                 JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"返回值不匹配");
+                                                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},返回值不匹配");
                                                 failedThisRound = true;
                                                 Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
                                                 break;
@@ -1311,12 +1436,13 @@ namespace TestingSoftware.ViewModels
                                     else if (diagService is Service31)
                                     {
                                         bool unlooked;
-                                        unlooked = await _mcuSecurityService.UnlockMCUAsync();
+                                        unlooked = await _mcuSecurityService.UnlockMCUNoPopAsync();
                                         if (!unlooked)
                                         {
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"解锁失败");
                                             failedThisRound = true;
+                                            _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},解锁失败");
                                             Log.Information($"执行任务失败:{job.JobName},解锁失败");
                                             break;
                                         }
@@ -1347,6 +1473,7 @@ namespace TestingSoftware.ViewModels
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"返回值不匹配");
                                             failedThisRound = true;
+                                            _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},返回值不匹配");
                                             Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
                                             break;
                                         }
@@ -1355,13 +1482,15 @@ namespace TestingSoftware.ViewModels
                                     else if (diagService is Service2f)
                                     {
                                         bool unlooked;
-                                        unlooked = await _mcuSecurityService.UnlockMCUAsync();
+                                        unlooked = await _mcuSecurityService.UnlockMCUNoPopAsync();
                                         if (!unlooked)
                                         {
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"解锁失败");
                                             failedThisRound = true;
                                             Log.Information($"执行任务失败:{job.JobName},解锁失败");
+                                            _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},解锁失败");
+
                                             break;
                                         }
                                         var service2f = (Service2f)diagService;
@@ -1393,9 +1522,31 @@ namespace TestingSoftware.ViewModels
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"返回值不匹配");
                                             failedThisRound = true;
                                             Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
+                                            _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},返回值不匹配");
                                             break;
                                         }
                                         JobStatusChanged(job, JOB_RUNNING);
+                                    }
+                                    else if (diagService is Service27)
+                                    {
+                                        bool unlooked;
+                                        unlooked = await _mcuSecurityService.UnlockMCUAsync();
+                                        if (!unlooked)
+                                        {
+                                            bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
+                                            JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"解锁失败");
+                                            failedThisRound = true;
+                                            Log.Information($"执行任务失败:{job.JobName},解锁失败");
+                                            break;
+                                        }
+
+                                        JobStatusChanged(job, JOB_RUNNING);
+                                    }
+                                    else if (diagService is Service10)
+                                    {
+                                       Service10 service10 = (Service10) diagService;
+                                       var request = service10.BuildRequest();
+                                       var response = await _udsService.Request(request);
                                     }
                                 }
                             }
@@ -1441,560 +1592,31 @@ namespace TestingSoftware.ViewModels
                         ConnectAction.Execute(null);
                         await Task.Delay(1000);
                         string result = new string(ScanSn.ToCharArray());
+                        _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, null);
                         ScanSn = String.Empty;
-                        BluetoothViewAdapter.SlaveDevices = new List<BluetoothInfo>();
                         OnPropertyChanged(nameof(BluetoothViewAdapter.SlaveDevices));
                         Status = JOB_PASS;
                         TestStatusInfo = result + "测试成功";
+
+
                     });
                 }
             }
             catch (OperationCanceledException)
             {
+                ChangeUI();
                 Log.Information("测试任务被手动终止");
+                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, "测试任务被手动终止");
+
             }
             catch (Exception ex)
             {
+                ChangeUI();
                 Log.Error(ex, "Job测试主任务异常");
+                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"Job测试主任务异常:{ex.Message}");
             }
+            ChangeUI();
         }
-        ///// <summary>
-        ///// 公共测试执行逻辑：【正常测试 / 复测】共用
-        ///// </summary>
-        ///// <param name="ct"></param>
-        //private async Task RunTestLogic(CancellationToken ct)
-        //{
-        //    try
-        //    {
-        //        //恢复所有测试项的job的初始状态
-        //        foreach (var _job in VisibleJobs)
-        //        {
-        //            JobStatusChanged(_job, 0, string.Empty);
-        //        }
-
-        //        for (int jobIndex = 0; jobIndex < VisibleJobs.Count; jobIndex++)
-        //        {
-        //            var job = VisibleJobs[jobIndex];
-
-        //            // =========复测核心：下标小于起始下标，直接跳过不执行=========
-        //            if (jobIndex < _retestStartIndex)
-        //            {
-        //                Log.Information($"复测跳过已完成Job:{job.JobName}");
-        //                continue;
-        //            }
-
-        //            _job3E80Cts?.Cancel();
-        //            _job3E80Cts?.Dispose();
-        //            if (_job3ETask != null) await _job3ETask;
-        //            _job3ETask = null;
-        //            _job3E80Cts = new CancellationTokenSource();
-        //            token3E80 = _job3E80Cts.Token;
-
-        //            if (ct.IsCancellationRequested) break;
-
-        //            if (job.Keep3E80)
-        //            {
-        //                //发送3E80维持会话,在这个job结束后,3E80停止发送
-        //                _job3ETask = Task.Run(async () =>
-        //                {
-        //                    try
-        //                    {
-        //                        if (_udsService.Running)
-        //                        {
-        //                            var _securityService = new McuSecurityService(_udsService);
-        //                            var startTime = HighResolutionTimer.Milliseconds;
-        //                            while (_udsService.Running && !token3E80.IsCancellationRequested)
-        //                            {
-        //                                if (HighResolutionTimer.Milliseconds - startTime > 5_000)
-        //                                {
-        //                                    startTime = HighResolutionTimer.Milliseconds;
-        //                                    Service3e service3e = new Service3e();
-        //                                    service3e.SubFunction = service3e.SUPPRESS_RESPONSE;
-        //                                    await _udsService.Request(service3e.BuildRequest(), token3E80);
-        //                                }
-        //                                else
-        //                                {
-        //                                    await Task.Delay(100, token3E80);
-        //                                }
-        //                            }
-        //                        }
-        //                    }
-        //                    catch (OperationCanceledException)
-        //                    {
-        //                        //正常停止
-        //                    }
-        //                    catch (Exception ex)
-        //                    {
-        //                        Log.Error(ex, "3E后台任务异常");
-        //                    }
-        //                }, token3E80);
-        //            }
-
-        //            Log.Information($"执行任务开始:{job.JobName}");
-        //            JobStatusChanged(job, 1);
-
-        //            if (job.IsCan)
-        //            {
-        //                int res = ExecuCan(job, ct);
-        //                if (res == -1)
-        //                {
-        //                    JobStatusChanged(job, -1, "CAN通讯测试失败,请检查CAN通讯连接");
-        //                    break;
-        //                }
-        //                else
-        //                {
-        //                    JobStatusChanged(job, res);
-        //                }
-        //                continue;
-        //            }
-
-        //            try
-        //            {
-        //                int CycleNumber = 0;
-        //                bool failedThisRound = false;
-        //                do
-        //                {
-        //                    failedThisRound = false;
-        //                    // 重试轮提示（第 2 轮起 job.Status == -2）
-        //                    if (job.Status == JOB_RETRYING)
-        //                        JobStatusChanged(job, JOB_RUNNING, $"第{CycleNumber + 1}轮重试");
-
-        //                    foreach (var service in job.Services)
-        //                    {
-        //                        if (failedThisRound) break;          // 已有 service 失败：跳过剩余
-        //                        if (ct.IsCancellationRequested)
-        //                        {
-        //                            JobStatusChanged(job, -3, "手动停止");
-        //                            Log.Information($"任务终止:{job.JobName},手动停止");
-        //                            break;
-        //                        }
-        //                        await Task.Delay(100, ct);
-        //                        var diagService = service;
-        //                        bool[] bools;
-        //                        if (diagService is IoService)
-        //                        {
-        //                            IoService? signalDiagService = (IoService)diagService;
-        //                            int datalent = 0;
-        //                            if (signalDiagService.Signals.Count == 0) throw new Exception("信号配置错误");
-        //                            switch (signalDiagService.IoType)
-        //                            {
-        //                                case IoType.Di:
-        //                                    bools = new bool[1];
-        //                                    bools = _modBusService.ReadDiscreteInputs((byte)(signalDiagService.StartAddress - 1), (byte)(signalDiagService.Values.Length), signalDiagService.SlaveId);
-        //                                    for (int i = 0; i < signalDiagService.Values.Length; i++)
-        //                                    {
-        //                                        if ((signalDiagService.Values[i] == 1) != bools[i])
-        //                                        {
-        //                                            JobStatusChanged(job, -1, signalDiagService.Signals[0].ErrorMsg, CycleNumber < job.CycleNumber);
-        //                                            Log.Information($"执行任务失败:{job.JobName}-{signalDiagService.Signals[0].Name},返回值不匹配");
-        //                                            break;
-        //                                        }
-        //                                    }
-        //                                    if (job.Status == -1) break;
-        //                                    break;
-        //                                case IoType.Do:
-        //                                    datalent = signalDiagService.Values.Length;
-        //                                    bools = new bool[datalent];
-        //                                    for (int i = 0; i < datalent; i++)
-        //                                    {
-        //                                        bools[i] = signalDiagService.Values[i] == 1;
-        //                                    }
-        //                                    _modBusService.WriteOutputCoils(signalDiagService.StartAddress, bools, signalDiagService.SlaveId);
-        //                                    break;
-        //                                case IoType.Ai:
-        //                                    ushort[] _readdata = _modBusService.ReadAiRegisters(signalDiagService.StartAddress, (ushort)(signalDiagService.Length), signalDiagService.SlaveId);
-        //                                    if (signalDiagService.Signals[0].Tolerance != 0 && signalDiagService.Signals[0].Expectation != null)
-        //                                    {
-        //                                        if (_readdata[0] < (int)signalDiagService.Signals[0].Expectation - (int)signalDiagService.Signals[0].Tolerance || _readdata[0] > (int)signalDiagService.Signals[0].Expectation + (int)signalDiagService.Signals[0].Tolerance)
-        //                                        {
-        //                                            JobStatusChanged(job, -1, signalDiagService.Signals[0].ErrorMsg, CycleNumber < job.CycleNumber);
-        //                                            Log.Information($"执行任务失败:{job.JobName}-{signalDiagService.Signals[0].Name},返回值不匹配");
-        //                                            break;
-        //                                        }
-        //                                        else
-        //                                        {
-        //                                            JobStatusChanged(job, 2, $"测试成功");
-        //                                        }
-        //                                    }
-        //                                    else
-        //                                    {
-        //                                        JobStatusChanged(job, -1, signalDiagService.Signals[0].ErrorMsg, CycleNumber < job.CycleNumber);
-        //                                        Log.Information($"执行任务失败:{job.JobName}-{signalDiagService.Signals[0].Name},返回值不匹配");
-        //                                        break;
-        //                                    }
-        //                                    break;
-        //                                case IoType.Ao:
-        //                                    if (datalent % 2 != 0)
-        //                                    {
-        //                                        throw new Exception("AO数据长度必须为偶数");
-        //                                    }
-        //                                    datalent = signalDiagService.Values.Length;
-        //                                    ushort[] values = new ushort[datalent / 2];
-        //                                    values[0] = (ushort)((signalDiagService.Values[0] << 8) | signalDiagService.Values[1]);
-        //                                    if (datalent == 4)
-        //                                    {
-        //                                        values[1] = (ushort)((signalDiagService.Values[2] << 8) | signalDiagService.Values[3]);
-        //                                    }
-        //                                    _modBusService.WriteAoMultiRegisters(signalDiagService.StartAddress, values, signalDiagService.SlaveId);
-        //                                    break;
-        //                                default:
-        //                                    break;
-        //                            }
-        //                        }
-        //                        else
-        //                        {
-        //                            if (!_udsService.Running)
-        //                            {
-        //                                await _udsService.StartAsync();
-        //                            }
-        //                            if (diagService is Service22)
-        //                            {
-        //                                int? ResponseValue = 0;
-        //                                var service22 = (Service22)diagService;
-        //                                if (service22.Signals.Count == 0) throw new Exception("信号配置错误");
-        //                                service22.Id = service22.Signals[0].Id;
-        //                                service22.ParsePayload = (w) =>
-        //                                {
-        //                                    foreach (var signal in diagService.Signals)
-        //                                    {
-        //                                        var sigv = new SignalViewModel(signal);
-        //                                        sigv.Parse(w);
-        //                                        ResponseValue = Convert.ToInt32(signal.Value);
-        //                                    }
-        //                                    return 0;
-        //                                };
-        //                                Pdu? pdu = await _udsService.Request(service22.BuildRequest(), ct);
-        //                                if (pdu != null)
-        //                                {
-        //                                    int result = service22.ParseResponse(pdu);
-        //                                    service22.ParsePayload = null;
-        //                                    if (result == -1)
-        //                                    {
-        //                                        JobStatusChanged(job, -1, $"解析失败");
-        //                                        Log.Information($"执行任务失败:{job.JobName},解析失败");
-        //                                    }
-        //                                    if (result == 0)
-        //                                    {
-        //                                        foreach (var signal in diagService.Signals)
-        //                                        {
-        //                                            var sigv = new SignalViewModel(signal);
-        //                                            if (sigv.Value != null)
-        //                                            {
-        //                                                switch (signal.Type)
-        //                                                {
-        //                                                    case 0: break;
-        //                                                    case 2:
-        //                                                        byte _v8 = byte.Parse(signal.Value ?? "00");
-        //                                                        if (_v8 < sigv.Expectation - sigv.Tolerance || _v8 > sigv.Expectation + sigv.Tolerance)
-        //                                                        {
-        //                                                            var smsg = PaseSigalErrorMsg(signal, _v8);
-        //                                                            JobStatusChanged(job, -1, smsg);
-        //                                                            Log.Information($"执行任务失败:{smsg}");
-        //                                                            break;
-        //                                                        }
-        //                                                        JobStatusChanged(job, 1);
-        //                                                        break;
-        //                                                    case 3:
-        //                                                        UInt16 _vu16 = UInt16.Parse(signal.Value ?? "00");
-        //                                                        if (_vu16 < sigv.Expectation - sigv.Tolerance || _vu16 > sigv.Expectation + sigv.Tolerance)
-        //                                                        {
-        //                                                            var smsg = PaseSigalErrorMsg(signal, _vu16);
-        //                                                            JobStatusChanged(job, -1, smsg);
-        //                                                            Log.Information($"执行任务失败:{smsg}");
-        //                                                            break;
-        //                                                        }
-        //                                                        JobStatusChanged(job, 1);
-        //                                                        break;
-        //                                                    case 4:
-        //                                                    case 5:
-        //                                                    case 6:
-        //                                                        int _vs16 = int.Parse(signal.Value ?? "00");
-        //                                                        if (_vs16 < sigv.Expectation - sigv.Tolerance || _vs16 > sigv.Expectation + sigv.Tolerance)
-        //                                                        {
-        //                                                            var smsg = PaseSigalErrorMsg(signal, _vs16);
-        //                                                            JobStatusChanged(job, -1, smsg);
-        //                                                            Log.Information($"执行任务失败:{smsg}");
-        //                                                            break;
-        //                                                        }
-        //                                                        JobStatusChanged(job, 1);
-        //                                                        break;
-        //                                                    case 7:
-        //                                                        float _vf = float.Parse(signal.Value ?? "0.0");
-        //                                                        if (_vf < sigv.Expectation - sigv.Tolerance || _vf > sigv.Expectation + sigv.Tolerance)
-        //                                                        {
-        //                                                            var smsg = PaseSigalErrorMsg(signal, _vf);
-        //                                                            JobStatusChanged(job, -1, smsg);
-        //                                                            Log.Information($"执行任务失败:{smsg}");
-        //                                                            break;
-        //                                                        }
-        //                                                        JobStatusChanged(job, 1);
-        //                                                        break;
-        //                                                    case 8: break;
-        //                                                }
-        //                                            }
-        //                                        }
-        //                                    }
-        //                                }
-        //                                else
-        //                                {
-        //                                    JobStatusChanged(job, -1, $"返回值不匹配", CycleNumber < job.CycleNumber);
-        //                                    Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
-        //                                    break;
-        //                                }
-        //                            }
-        //                            else if (diagService is Service2e)
-        //                            {
-        //                                bool unlooked;
-        //                                var service2e = (Service2e)diagService;
-        //                                if (service2e.Signals[0].Id != 0x04)
-        //                                {
-        //                                    unlooked = await _mcuSecurityService.UnlockMCUAsync();
-        //                                    if (!unlooked)
-        //                                    {
-        //                                        JobStatusChanged(job, -1, $"解锁失败", CycleNumber < job.CycleNumber);
-        //                                        Log.Information($"执行任务失败:{job.JobName},解锁失败");
-        //                                        break;
-        //                                    }
-        //                                }
-        //                                if (service2e.Signals.Count == 0) throw new Exception("信号配置错误");
-        //                                service2e.Id = service2e.Signals[0].Id;
-        //                                int content = 0;
-        //                                if (service2e.Signals[0].Id == SERIAL_NUM)
-        //                                {
-        //                                    if (Model == null)
-        //                                    {
-        //                                        JobStatusChanged(job, -1, $"写入SN失败", CycleNumber < job.CycleNumber);
-        //                                        Log.Information($"执行任务失败:{job.JobName},读取默认SN失败");
-        //                                        break;
-        //                                    }
-        //                                    content = await ReadSn(Model.DefaultSN);
-        //                                    if (content == -1)
-        //                                    {
-        //                                        JobStatusChanged(job, -1, $"写入SN失败", CycleNumber < job.CycleNumber);
-        //                                        Log.Information($"执行任务失败:{job.JobName},写入SN失败");
-        //                                        break;
-        //                                    }
-        //                                    else if (content == 2)
-        //                                    {
-        //                                        JobStatusChanged(job, -1, $"设备SN已写入与扫描SN不同", CycleNumber < job.CycleNumber);
-        //                                        Log.Information($"执行任务失败:{job.JobName},设备SN已写入与扫描SN不同");
-        //                                        break;
-        //                                    }
-        //                                    else if (content == 0)
-        //                                    {
-        //                                        service2e.BuildPayload += w =>
-        //                                        {
-        //                                            int result = 0;
-        //                                            job.SignalViewModels[0].Value = ScanSn;
-        //                                            result = job.SignalViewModels[0].Build(w);
-        //                                            return result;
-        //                                        };
-        //                                    }
-        //                                }
-        //                                else if (service2e.Signals[0].Id == 0x04)
-        //                                {
-        //                                    unlooked = await _mcuSecurityService.UnlockLicenseMCUAsync();
-        //                                    if (!unlooked)
-        //                                    {
-        //                                        JobStatusChanged(job, -1, $"解锁失败", CycleNumber < job.CycleNumber);
-        //                                        Log.Information($"执行任务失败:{job.JobName},解锁失败");
-        //                                        break;
-        //                                    }
-        //                                    //⚠️重要：原来BuildPayload回调内部调用Wait会卡死，重构，不要在委托内部Wait！
-        //                                    service2e.BuildPayload = writer =>
-        //                                    {
-        //                                        byte[] data = { 0 };
-        //                                        Service22 service22 = new Service22();
-        //                                        service22.Id = DID_PV_SN;
-        //                                        service22.ParsePayload = reader =>
-        //                                        {
-        //                                            data = reader.ReadBytes((int)reader.BaseStream.Length);
-        //                                            return 0;
-        //                                        };
-        //                                        //⚠️禁止pduTask.Wait()，BuildPayload委托是同步回调，不能阻塞！
-        //                                        var pdu = _udsService.Request(service22.BuildRequest(), ct).Result;
-        //                                        if (pdu == null)
-        //                                            return -1;
-        //                                        service22.ParseResponse(pdu);
-
-        //                                        if (data.Length == 12)
-        //                                        {
-        //                                            byte[] license = alg_encrypt(data);
-        //                                            foreach (byte b in license)
-        //                                            {
-        //                                                writer.Write(b);
-        //                                            }
-        //                                        }
-        //                                        return 0;
-        //                                    };
-        //                                }
-        //                                else
-        //                                {
-        //                                    service2e.BuildPayload += w =>
-        //                                    {
-        //                                        int result = 0;
-        //                                        foreach (var sig in service2e.Signals)
-        //                                        {
-        //                                            var sigv = new SignalViewModel(sig);
-        //                                            sigv.Text = sigv.DefaultValue;
-        //                                            result = sigv.Build(w);
-        //                                        }
-        //                                        return result;
-        //                                    };
-        //                                }
-        //                                if (content == 0)
-        //                                {
-        //                                    Pdu? pdu = await _udsService.Request(service2e.BuildRequest(), ct);
-        //                                    service2e.BuildPayload = null;
-        //                                    if (pdu == null || (service2e.ParseResponse(pdu)) != 0)
-        //                                    {
-        //                                        JobStatusChanged(job, -1, $"返回值不匹配", CycleNumber < job.CycleNumber);
-        //                                        Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
-        //                                        break;
-        //                                    }
-        //                                }
-        //                            }
-        //                            else if (diagService is Service31)
-        //                            {
-        //                                bool unlooked;
-        //                                unlooked = await _mcuSecurityService.UnlockMCUAsync();
-        //                                if (!unlooked)
-        //                                {
-        //                                    JobStatusChanged(job, -1, $"解锁失败", CycleNumber < job.CycleNumber);
-        //                                    Log.Information($"执行任务失败:{job.JobName},解锁失败");
-        //                                    break;
-        //                                }
-        //                                var service31 = (Service31)diagService;
-        //                                if (service31.Signals.Count == 0) throw new Exception("信号配置错误");
-        //                                service31.Id = service31.Signals[0].Id;
-        //                                service31.BuildPayload += w =>
-        //                                {
-        //                                    int result = 0;
-        //                                    foreach (var signal in service31.Signals)
-        //                                    {
-        //                                        var sigv = new SignalViewModel(signal);
-        //                                        if (sigv.WriteData != null)
-        //                                        {
-        //                                            w.Write(sigv.WriteData);
-        //                                        }
-        //                                        else
-        //                                        {
-        //                                            sigv.Build(w);
-        //                                        }
-        //                                    }
-        //                                    return result;
-        //                                };
-        //                                Pdu? pdu = await _udsService.Request(service31.BuildRequest(), ct);
-        //                                service31.BuildPayload = null;
-        //                                if (pdu == null || (service31.ParseResponse(pdu)) != 0)
-        //                                {
-        //                                    JobStatusChanged(job, -1, $"返回值不匹配", CycleNumber < job.CycleNumber);
-        //                                    Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
-        //                                    break;
-        //                                }
-        //                            }
-        //                            else if (diagService is Service2f)
-        //                            {
-        //                                bool unlooked;
-        //                                unlooked = await _mcuSecurityService.UnlockMCUAsync();
-        //                                if (!unlooked)
-        //                                {
-        //                                    JobStatusChanged(job, -1, $"解锁失败", CycleNumber < job.CycleNumber);
-        //                                    Log.Information($"执行任务失败:{job.JobName},解锁失败");
-        //                                    break;
-        //                                }
-        //                                var service2f = (Service2f)diagService;
-        //                                if (service2f.Signals.Count == 0) throw new Exception("信号配置错误");
-        //                                service2f.Id = service2f.Signals[0].Id;
-        //                                service2f.BuildPayload += w =>
-        //                                {
-        //                                    if (service2f.Ctrl_type == Service2f.RETURN_CONTROL_TO_ECU) return 0;
-        //                                    int result = 0;
-        //                                    foreach (var signal in service2f.Signals)
-        //                                    {
-        //                                        var sigv = new SignalViewModel(signal);
-        //                                        if (sigv.WriteData != null)
-        //                                        {
-        //                                            w.Write(sigv.WriteData);
-        //                                        }
-        //                                        else
-        //                                        {
-        //                                            sigv.Build(w);
-        //                                        }
-        //                                    }
-        //                                    return result;
-        //                                };
-        //                                Pdu? pdu = await _udsService.Request(service2f.BuildRequest(), ct);
-        //                                service2f.BuildPayload = null;
-        //                                if (pdu == null || (service2f.ParseResponse(pdu)) != 0)
-        //                                {
-        //                                    JobStatusChanged(job, -1, $"返回值不匹配", CycleNumber < job.CycleNumber);
-        //                                    Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
-        //                                    break;
-        //                                }
-        //                            }
-        //                        }
-        //                    }
-        //                    if (job.Cycle)
-        //                    {
-        //                        await Task.Delay(job.CycleDelayTimeMs, ct);
-        //                        CycleNumber++;
-        //                    }
-        //                    if (job.Status == 2)
-        //                    {
-        //                        CycleNumber = 9999999;
-        //                    }
-
-        //                } while (job.Cycle && CycleNumber <= job.CycleNumber && !ct.IsCancellationRequested);
-
-        //                if (job.Status == 1)
-        //                {
-        //                    Log.Information($"执行任务完成:{job.JobName}");
-        //                    JobStatusChanged(job, 2, $"测试成功");
-        //                }
-        //            }
-        //            catch (OperationCanceledException)
-        //            {
-        //                break;
-        //            }
-        //            catch (Exception ex)
-        //            {
-        //                Log.Information($"执行任务失败:{job.JobName}-{ex.Message}\n{ex.StackTrace}");
-        //                JobStatusChanged(job, -1, "任务终止:未知错误");
-        //                break;
-        //            }
-        //            if (job.Status == -1)
-        //            {
-        //                break;
-        //            }
-        //        }
-
-        //        await _udsService.StopAsync();
-
-        //        if (Status == 2)
-        //        {
-        //            await Application.Current.Dispatcher.InvokeAsync(async () =>
-        //            {
-        //                ConnectAction.Execute(null);
-        //                await Task.Delay(1000);
-        //                string result = new string(ScanSn.ToCharArray());
-        //                ScanSn = String.Empty;
-        //                BluetoothViewAdapter.SlaveDevices = new List<BluetoothInfo>();
-        //                OnPropertyChanged(nameof(BluetoothViewAdapter.SlaveDevices));
-        //                Status = 2;
-        //                TestStatusInfo = result + "测试成功";
-        //            });
-        //        }
-        //    }
-        //    catch (OperationCanceledException)
-        //    {
-        //        Log.Information("测试任务被手动终止");
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        Log.Error(ex, "Job测试主任务异常");
-        //    }
-        //}
 
         private string PaseSigalErrorMsg(SignalModel signal, object value)
         {

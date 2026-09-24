@@ -108,7 +108,7 @@ namespace TestingSoftware.ViewModels
 
             // Attempt to unlock the MCU using UDS Security Access (Service 0x27).
             // Returns true if unlock was successful, false otherwise.
-            var success = await _securityService.UnlockMCUAsync();
+            var success = await _securityService.UnlockMCUNoPopAsync();
             if (success)
             {
                 if (parameter == "TORQUE")
@@ -354,11 +354,11 @@ namespace TestingSoftware.ViewModels
                 if (parameter?.Id == 0xf18d)
                 {
                     ReadID();
-                    _csvHelper.Update(ChipID, parameter.Text);
+                    _csvHelper.Update(ChipID, parameter.Text, true,null);
                 }
                 Pdu request;
                 Pdu? response;
-                var success = await _securityService.UnlockMCUAsync();
+                var success = await _securityService.UnlockMCUNoPopAsync();
                 if (success)
                 {
                     // Write the programming date.
@@ -417,7 +417,7 @@ namespace TestingSoftware.ViewModels
             string parameter = sender.ToString() ?? "";
 
             // Attempt to unlock the MCU using UDS Security Access (Service 0x27).
-            var success = await _securityService.UnlockMCUAsync();
+            var success = await _securityService.UnlockMCUNoPopAsync();
             if (success)
             {
                 if (parameter == "TORQUE")

@@ -38,8 +38,12 @@ namespace TestingSoftware
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool SetDllDirectoryW(string lpPathName);
 
+
         public App()
         {
+            ConsoleWindow.Show(); // 动态创建控制台，无闪烁
+            ConsoleWindow.Hide(); // 动态创建控制台，无闪烁
+
             _host = Host.CreateDefaultBuilder()
             .ConfigureServices((hostContext, services) =>
             {
@@ -111,7 +115,7 @@ namespace TestingSoftware
         /// <param name="e"></param>
         protected override void OnStartup(StartupEventArgs e)
         {
-
+           
             string appName = "TestingSoftware";
 
             // 获取 LocalApplicationData 路径并构建日志目录
@@ -126,7 +130,7 @@ namespace TestingSoftware
 
             // 特殊日志文件路径（每小时滚动）
             string generalLogPath = Path.Combine(logsDirectory, "Data-.txt");
-
+          
             // Initialize the logger.
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
@@ -169,11 +173,12 @@ namespace TestingSoftware
             // Set the main windows and show it.
             MainWindow = _host.Services.GetRequiredService<MainWindow>();
             MainWindow.Show();
-
+           
             base.OnStartup(e);
             // 接管 "vbac.dll" 的dll解析
             NativeLibrary.SetDllImportResolver(typeof(App).Assembly, ResolveVbacDll);
         }
+
 
         /// <summary>
         /// 

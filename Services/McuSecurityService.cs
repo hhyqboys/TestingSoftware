@@ -191,6 +191,7 @@ namespace TestingSoftware.Services
                 Pdu request;
                 Pdu? response;
 
+
                 Service10 service10 = new Service10();
                 service10.Subfunc = Service10.EXTENDED_DIAG_SESSION;
                 request = service10.BuildRequest();
@@ -246,16 +247,25 @@ namespace TestingSoftware.Services
                 {
                     await _uds.StartAsync();
                 }
+                int result = 0;
                 Pdu request;
                 Pdu? response;
 
-                Service10 service10 = new Service10();
-                service10.Subfunc = Service10.EXTENDED_DIAG_SESSION;
-                request = service10.BuildRequest();
-                response = await _uds.Request(request);
-                if (response == null || (service10.ParseResponse(response)) != 0)
-                {
+                int session = await GetMcuSession();
+                if (session < 0)
                     break;
+
+                if (session != 0x03)
+                {
+                    Service10 service10 = new Service10();
+                    service10.Subfunc = Service10.EXTENDED_DIAG_SESSION;
+                    request = service10.BuildRequest();
+                    response = await _uds.Request(request);
+                    if (response == null || (result = service10.ParseResponse(response)) != 0)
+                    {
+                        result = -1;
+                        break;
+                    }
                 }
                 // Try to request a new seed.
                 Service27 service27 = new Service27();

@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
 	<TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -12,6 +12,7 @@
   <ItemGroup>
     <None Remove="Lib\x64\vbac.dll" />
     <None Remove="Lib\x86\vbac.dll" />
+    <None Remove="Resources\ElectricControl.ico" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,10 +22,9 @@
     <EmbeddedResource Include="Lib\x86\vbac.dll">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </EmbeddedResource>
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Resources\" />
+    <Resource Include="Resources\ElectricControl.ico">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Resource>
   </ItemGroup>
 <ItemGroup>
 		<PackageReference Include="MahApps.Metro" Version="2.4.11" />

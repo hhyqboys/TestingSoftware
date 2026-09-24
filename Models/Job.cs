@@ -42,6 +42,7 @@ namespace TestingSoftware.Models
         public bool Cycle { get; set; } = false;
         [Description("任务循环间隔时间ms")]
         public int CycleDelayTimeMs { get; set; } = 100;
+        public int StartDelayTimeMs { get; set; } = 100;
 
         [Description("任务循环次数 1-65535")]
         public int CycleNumber { get; set; } = 1;
