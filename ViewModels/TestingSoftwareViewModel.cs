@@ -850,6 +850,19 @@ namespace TestingSoftware.ViewModels
             IsConnectButtonEnabled = connected;
             RefreshConnectedFlags();   // 连接/断开后立即刷新列表中设备的 IsConnected 标记
             ChangeUI();   // ← 关键：刷新开始/停止/复测
+
+            // 连接成功 → 自动停止扫描；断开（主动/被动）→ 自动开始扫描
+            if (connected)
+            {
+                if (IsScanLooping) StopLoopingScan();
+            }
+            else
+            {
+                if (!IsScanLooping)
+                {
+                    _ = StartLoopingScan();
+                }
+            }
         }
         /// <summary>
         /// 开始测试
@@ -1721,6 +1734,7 @@ namespace TestingSoftware.ViewModels
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"解锁失败");
                                             failedThisRound = true;
+                                            Log.Information($"执行任务失败:{job.JobName},解锁失败");
                                             _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},解锁失败");
 
                                             break;
@@ -1753,6 +1767,7 @@ namespace TestingSoftware.ViewModels
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"返回值不匹配");
                                             failedThisRound = true;
+                                            Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
                                             _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},返回值不匹配");
                                             break;
                                         }
