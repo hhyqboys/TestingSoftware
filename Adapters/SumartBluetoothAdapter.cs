@@ -38,9 +38,13 @@ namespace TestingSoftware.Adapters
         private readonly Guid txUuid = new Guid("366076ab-53c9-1baa-cd9d-380e749806dd"); // 写特征（主机 → 外设）
 
         [XmlIgnore]
-        private readonly Guid _serviceUuid = new Guid("0000FFE0-0000-1000-8000-00805F9B34FB");
+        private readonly Guid newServiceUuid = new Guid("0000FFF0-0000-1000-8000-00805F9B34FB");
         [XmlIgnore]
-        private readonly Guid _characteristicUuid = new Guid("0000FFE1-0000-1000-8000-00805F9B34FB");
+        private readonly Guid newRxUuid = new Guid("0000FFF1-0000-1000-8000-00805F9B34FB"); // 通知特征（外设 → 主机）
+        [XmlIgnore]
+        private readonly Guid newTxUuid = new Guid("0000FFF2-0000-1000-8000-00805F9B34FB"); // 写特征（主机 → 外设）
+
+
         public SumartBluetoothAdapter()
         {
             Datalinks = new List<Datalink> { new BluetoothDataLink() };
@@ -74,7 +78,6 @@ namespace TestingSoftware.Adapters
         [XmlIgnore]
         private bool _isUserInitiatedDisconnect = false;
         private bool _isBroadcast;
-        private string DeviceName = "F";
 
         public BluetoothInfo SelectedSlaveDevInfo
         {
@@ -115,47 +118,90 @@ namespace TestingSoftware.Adapters
                 _device = await BluetoothLEDevice.FromBluetoothAddressAsync(SelectedSlaveDevInfo.BluetoothAddress);
                 if (_device == null) return -1;
 
-                //在这里订阅连接状态变化事件
+                // ★ 关键：在这里订阅连接状态变化事件
                 _device.ConnectionStatusChanged += OnConnectionStatusChanged;
 
-
+                /* Old BLE */
                 var servicesResult = await _device.GetGattServicesForUuidAsync(serviceUuid);
-                if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
+                if (servicesResult.Status == GattCommunicationStatus.Success && servicesResult.Services.Count > 0)
                 {
-
-                    return -1;
-                }
-                //Log.Debug("发现服务");
-                var service = servicesResult.Services[0];
-                _gattService = service;
-                // 发现特征
-                var characteristicsResult = await service.GetCharacteristicsAsync();
-                if (characteristicsResult.Status != GattCommunicationStatus.Success)
-                {
-                    return -1;
-                }
-                // Log.Debug("发现特征");
-                foreach (var characteristic in characteristicsResult.Characteristics)
-                {
-                    Log.Debug($"{characteristic.Uuid} - {characteristic.CharacteristicProperties}");
-                    if (characteristic.Uuid == txUuid && (characteristic.CharacteristicProperties & GattCharacteristicProperties.Write) != 0)
+                    //Log.Debug("发现服务");
+                    var service = servicesResult.Services[0];
+                    _gattService = service;
+                    // 发现特征
+                    var characteristicsResult = await service.GetCharacteristicsAsync();
+                    if (characteristicsResult.Status != GattCommunicationStatus.Success)
                     {
-                        _writeCharacteristic = characteristic;
-                        //  Log.Debug($"找到写方法{characteristic.CharacteristicProperties}");
+                        return -1;
+                    }
+                    // Log.Debug("发现特征");
+                    foreach (var characteristic in characteristicsResult.Characteristics)
+                    {
+                        Log.Debug($"{characteristic.Uuid} - {characteristic.CharacteristicProperties}");
+                        if (characteristic.Uuid == txUuid && (characteristic.CharacteristicProperties & GattCharacteristicProperties.Write) != 0)
+                        {
+                            _writeCharacteristic = characteristic;
+                            //  Log.Debug($"找到写方法{characteristic.CharacteristicProperties}");
+                        }
+
+                        if (characteristic.Uuid == rxUuid && (characteristic.CharacteristicProperties & GattCharacteristicProperties.Notify) != 0)
+                        {
+                            _notifyCharacteristic = characteristic;
+                            var status = await _notifyCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
+                                GattClientCharacteristicConfigurationDescriptorValue.Notify);
+
+                            if (status == GattCommunicationStatus.Success)
+                            {
+
+                                _notifyCharacteristic.ValueChanged += OnDataReceived;
+
+                                // Log.Debug($"找到读方法{characteristic.CharacteristicProperties}");
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    /* New BLE */
+                    servicesResult = await _device.GetGattServicesForUuidAsync(newServiceUuid);
+                    if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
+                    {
+                        return -1;
                     }
 
-                    if (characteristic.Uuid == rxUuid && (characteristic.CharacteristicProperties & GattCharacteristicProperties.Notify) != 0)
+                    //Log.Debug("发现服务");
+                    var service = servicesResult.Services[0];
+                    _gattService = service;
+                    // 发现特征
+                    var characteristicsResult = await service.GetCharacteristicsAsync();
+                    if (characteristicsResult.Status != GattCommunicationStatus.Success)
                     {
-                        _notifyCharacteristic = characteristic;
-                        var status = await _notifyCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-                            GattClientCharacteristicConfigurationDescriptorValue.Notify);
-
-                        if (status == GattCommunicationStatus.Success)
+                        return -1;
+                    }
+                    // Log.Debug("发现特征");
+                    foreach (var characteristic in characteristicsResult.Characteristics)
+                    {
+                        Log.Debug($"{characteristic.Uuid} - {characteristic.CharacteristicProperties}");
+                        if (characteristic.Uuid == newTxUuid && (characteristic.CharacteristicProperties & GattCharacteristicProperties.Write) != 0)
                         {
+                            _writeCharacteristic = characteristic;
+                            //  Log.Debug($"找到写方法{characteristic.CharacteristicProperties}");
+                        }
 
-                            _notifyCharacteristic.ValueChanged += OnDataReceived;
+                        if (characteristic.Uuid == newRxUuid && (characteristic.CharacteristicProperties & GattCharacteristicProperties.Notify) != 0)
+                        {
+                            _notifyCharacteristic = characteristic;
+                            var status = await _notifyCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
+                                GattClientCharacteristicConfigurationDescriptorValue.Notify);
 
-                            // Log.Debug($"找到读方法{characteristic.CharacteristicProperties}");
+                            if (status == GattCommunicationStatus.Success)
+                            {
+                                handshake = true;
+
+                                _notifyCharacteristic.ValueChanged += OnDataReceived;
+
+                                // Log.Debug($"找到读方法{characteristic.CharacteristicProperties}");
+                            }
                         }
                     }
                 }
@@ -164,6 +210,8 @@ namespace TestingSoftware.Adapters
             {
                 return -1;
             }
+
+
 
 
             if (SelectedSlaveDevInfo.Address != null)
