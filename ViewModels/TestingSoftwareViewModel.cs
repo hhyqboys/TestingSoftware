@@ -1,15 +1,18 @@
-﻿using ControlzEx.Standard;
+using ControlzEx.Standard;
 using Serilog;
 using System.Collections.ObjectModel;
 using System.Data;
 using System.IO;
 using System.IO.Ports;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Forms;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using System.Xml.Serialization;
+using Windows.Devices.Bluetooth.Advertisement;
 using TestingSoftware.Adapters;
 using TestingSoftware.Commands;
 using TestingSoftware.Models;
@@ -252,6 +255,22 @@ namespace TestingSoftware.ViewModels
             set { _isScanning = value; OnPropertyChanged(nameof(IsScanning)); }
         }
 
+        /// <summary>是否正在循环扫描中（再次点击扫描按钮即停止）</summary>
+        private bool _isScanLooping;
+        public bool IsScanLooping
+        {
+            get => _isScanLooping;
+            set { _isScanLooping = value; OnPropertyChanged(nameof(IsScanLooping)); }
+        }
+
+        /// <summary>未连接设备超过该时长未再广播则自动从列表移除</summary>
+        private static readonly TimeSpan DeviceOfflineTimeout = TimeSpan.FromSeconds(30);
+        /// <summary>离线巡检周期</summary>
+        private static readonly TimeSpan CleanupInterval = TimeSpan.FromSeconds(5);
+
+        private BluetoothLEAdvertisementWatcher? _bleWatcher;
+        private DispatcherTimer? _bleCleanupTimer;
+
 
         public ObservableCollection<BluetoothInfo> SlaveDevices { get; } = new ObservableCollection<BluetoothInfo>();
 
@@ -295,30 +314,8 @@ namespace TestingSoftware.ViewModels
             _csvHelper.Init(GetElectricControlFolder() + "\\SN设备映射表.csv");
             _modBusService = modBusService;
             BluetoothViewAdapter = sumartBluetoothAdapter;
-            BluetoothViewAdapter = sumartBluetoothAdapter;
-            BluetoothViewAdapter.ScanStateChanged += (s, started) =>
-            {
-                Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    IsScanning = !started;   // 语义与蓝牙VM一致：扫描中=false，空闲=true
-                });
-            };
-            BluetoothViewAdapter.BluetoothDeviceFound += async (s, e) =>
-            {
-                await Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    SlaveDevices.Clear();
-                    foreach (var dev in BluetoothViewAdapter.SlaveDevices)
-                    {
-                        SlaveDevices.Add(dev);
-                    }
-                    SelectedSlaveDevInfo = BluetoothViewAdapter.SelectedSlaveDevInfo;
-                    IsScanning = BluetoothViewAdapter.IsScanning;
-                    OnPropertyChanged(nameof(SelectedSlaveDevInfo));
-                    OnPropertyChanged(nameof(IsScanning));
-                });
-            };
-
+            // 蓝牙循环扫描与列表维护由本 VM 直接驱动（ScanAction / OnBleAdvertisementReceived / CleanupTimer），
+            // 不再订阅 BluetoothViewAdapter.ScanStateChanged / BluetoothDeviceFound。
 
             _mcuSecurityService = new McuSecurityService(_udsService);
             //_lineConfigPageView = lineConfigPageView;
@@ -519,14 +516,200 @@ namespace TestingSoftware.ViewModels
         });
 
         /// <summary>
-        /// The method is to connect to a Bluetooth device.
+        /// 扫描按钮：切换循环扫描开始/停止。
+        /// 扫描过程中 SlaveDevices 实时增删改；非连接设备 30s 未再广播自动移除；
+        /// 已连接设备永久保留。
         /// </summary>
         public ICommand ScanAction => new AsyncCommand(async p =>
         {
-
-            await BluetoothViewAdapter.ScanAction();
-
+            if (IsScanLooping)
+            {
+                StopLoopingScan();
+            }
+            else
+            {
+                await StartLoopingScan();
+            }
         });
+
+        private async Task StartLoopingScan()
+        {
+            StopBleWatcherInternal();
+            StopCleanupTimer();
+
+            IsScanLooping = true;
+            IsScanning = false;   // 与原语义一致：扫描中=false，空闲=true
+            OnPropertyChanged(nameof(ScanAction));
+
+            await Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                SlaveDevices.Clear();
+                SelectedSlaveDevInfo = null;
+            });
+
+            _bleWatcher = new BluetoothLEAdvertisementWatcher
+            {
+                ScanningMode = BluetoothLEScanningMode.Active
+            };
+            _bleWatcher.Received += OnBleAdvertisementReceived;
+            _bleWatcher.Stopped  += OnBleWatcherStopped;
+
+            try
+            {
+                _bleWatcher.Start();
+                StartCleanupTimer();
+                Log.Information("蓝牙循环扫描已启动（TestingSoftwareViewModel）");
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"蓝牙扫描启动失败：{ex.Message}");
+                IsScanLooping = false;
+                IsScanning = true;
+                StopCleanupTimer();
+            }
+        }
+
+        private void StopLoopingScan()
+        {
+            StopBleWatcherInternal();
+            StopCleanupTimer();
+            IsScanLooping = false;
+            IsScanning = true;
+            OnPropertyChanged(nameof(ScanAction));
+            Log.Information("蓝牙循环扫描已停止");
+        }
+
+        private void StopBleWatcherInternal()
+        {
+            if (_bleWatcher == null) return;
+            try
+            {
+                _bleWatcher.Received -= OnBleAdvertisementReceived;
+                _bleWatcher.Stopped  -= OnBleWatcherStopped;
+                if (_bleWatcher.Status == BluetoothLEAdvertisementWatcherStatus.Started)
+                {
+                    _bleWatcher.Stop();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"停止 BLE watcher 异常：{ex.Message}");
+            }
+            _bleWatcher = null;
+        }
+
+        private void OnBleAdvertisementReceived(BluetoothLEAdvertisementWatcher sender,
+            BluetoothLEAdvertisementReceivedEventArgs args)
+        {
+            var adv = args.Advertisement;
+            if (adv == null) return;
+
+            string deviceName = adv.LocalName;
+            // 只保留 SM 前缀设备（与原过滤规则一致）
+            if (string.IsNullOrWhiteSpace(deviceName) ||
+                !deviceName.StartsWith("SM", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ulong btAddress = args.BluetoothAddress;
+            short rssi = args.RawSignalStrengthInDBm;
+            string addressStr = string.Join(":", BitConverter.GetBytes(btAddress)
+                .Reverse().Take(8).Select(b => b.ToString("X2")));
+
+            Application.Current.Dispatcher.InvokeAsync(() =>
+            {
+                var existing = SlaveDevices.FirstOrDefault(d => d.BluetoothAddress == btAddress);
+                if (existing != null)
+                {
+                    // 已知设备：实时刷新名称/信号/最后发现时间
+                    existing.Name = deviceName;
+                    existing.Rssi = rssi;
+                    existing.LastSeenTime = DateTime.Now;
+                }
+                else
+                {
+                    // 新设备：加入列表（ObservableCollection 自动通知 ComboBox）
+                    SlaveDevices.Add(new BluetoothInfo
+                    {
+                        Name = deviceName,
+                        Address = addressStr,
+                        BluetoothAddress = btAddress,
+                        Rssi = rssi,
+                        LastSeenTime = DateTime.Now
+                    });
+                }
+                RefreshConnectedFlags();
+            });
+        }
+
+        private void OnBleWatcherStopped(BluetoothLEAdvertisementWatcher sender,
+            BluetoothLEAdvertisementWatcherStoppedEventArgs args)
+        {
+            if (!ReferenceEquals(_bleWatcher, sender)) return;
+            try
+            {
+                sender.Received -= OnBleAdvertisementReceived;
+                sender.Stopped  -= OnBleWatcherStopped;
+            }
+            catch { /* ignore */ }
+
+            _bleWatcher = null;
+            IsScanLooping = false;
+            IsScanning = true;
+            StopCleanupTimer();
+            OnPropertyChanged(nameof(ScanAction));
+        }
+
+        /// <summary>每 5s 巡检：未连接且 30s 未再广播的设备自动移除；连接中设备永久保留</summary>
+        private void StartCleanupTimer()
+        {
+            StopCleanupTimer();
+            _bleCleanupTimer = new DispatcherTimer { Interval = CleanupInterval };
+            _bleCleanupTimer.Tick += (s, e) =>
+            {
+                var now = DateTime.Now;
+                RefreshConnectedFlags();
+                for (int i = SlaveDevices.Count - 1; i >= 0; i--)
+                {
+                    var d = SlaveDevices[i];
+                    if (!d.IsConnected && (now - d.LastSeenTime) > DeviceOfflineTimeout)
+                    {
+                        Log.Information($"设备离线超过 {DeviceOfflineTimeout.TotalSeconds}s，自动移除：{d.Name} ({d.Address})");
+                        if (SelectedSlaveDevInfo?.BluetoothAddress == d.BluetoothAddress)
+                        {
+                            SelectedSlaveDevInfo = null;
+                        }
+                        SlaveDevices.RemoveAt(i);
+                    }
+                }
+            };
+            _bleCleanupTimer.Start();
+        }
+
+        private void StopCleanupTimer()
+        {
+            if (_bleCleanupTimer != null)
+            {
+                _bleCleanupTimer.Stop();
+                _bleCleanupTimer = null;
+            }
+        }
+
+        /// <summary>根据当前连接状态，刷新列表中每个设备的 IsConnected 标记</summary>
+        private void RefreshConnectedFlags()
+        {
+            ulong connectedAddr = 0;
+            if (BluetoothViewAdapter?.Model != null && BluetoothViewAdapter.Model.Running
+                && BluetoothViewAdapter.Model.SelectedSlaveDevInfo != null)
+            {
+                connectedAddr = BluetoothViewAdapter.Model.SelectedSlaveDevInfo.BluetoothAddress;
+            }
+            foreach (var d in SlaveDevices)
+            {
+                d.IsConnected = (connectedAddr != 0 && d.BluetoothAddress == connectedAddr);
+            }
+        }
 
         /// <summary>
         /// The method is used to stop the protocol stack and listening.
@@ -665,6 +848,7 @@ namespace TestingSoftware.ViewModels
             BluetoothViewAdapter.Running = connected;
             ConnectionLabel = connected ? "断开" : "链接";
             IsConnectButtonEnabled = connected;
+            RefreshConnectedFlags();   // 连接/断开后立即刷新列表中设备的 IsConnected 标记
             ChangeUI();   // ← 关键：刷新开始/停止/复测
         }
         /// <summary>
@@ -1537,7 +1721,6 @@ namespace TestingSoftware.ViewModels
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"解锁失败");
                                             failedThisRound = true;
-                                            Log.Information($"执行任务失败:{job.JobName},解锁失败");
                                             _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},解锁失败");
 
                                             break;
@@ -1570,7 +1753,6 @@ namespace TestingSoftware.ViewModels
                                             bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
                                             JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, $"返回值不匹配");
                                             failedThisRound = true;
-                                            Log.Information($"执行任务失败:{job.JobName},返回值不匹配");
                                             _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"执行任务失败:{job.JobName},返回值不匹配");
                                             break;
                                         }
@@ -1746,7 +1928,7 @@ namespace TestingSoftware.ViewModels
                 [32] = "驱动保护",
                 [64] = "MCU过温",
                 [128] = "电机过温",
-                [256] = "编码器故障",
+                [256] = "缺相",
                 [512] = "MCU温度传感器",
                 [1024] = "电机温度传感器",
                 [2048] = "MOSFET上管短路",
