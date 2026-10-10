@@ -245,7 +245,6 @@
                         Margin="5"
                         VerticalAlignment="Center"
                         FontSize="20"
-                        IsEnabled="{Binding IsScanning}"
                         ItemsSource="{Binding SlaveDevices}"
                         SelectedItem="{Binding SelectedSlaveDevInfo}"
                         Style="{StaticResource DisabledComboBoxStyle}" />
