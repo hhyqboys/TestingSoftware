@@ -11,6 +11,14 @@ namespace TestingSoftware.Services
         private SerialPort _serialPort;
         private ModbusSerialMaster _modbusMaster;
         public bool IsRunning;
+
+        public bool IsConnected
+        {
+            get
+            {
+                return _serialPort != null && _serialPort.IsOpen;
+            }
+        }
         public ModBusService()
         {
         }

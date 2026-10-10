@@ -11,6 +11,8 @@ using System.Text;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Xml.Serialization;
+using TestingSoftware.Protocols;
+using TestingSoftware.Protocols.Bluetoolth;
 using TestingSoftware.Utilities;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
@@ -74,11 +76,15 @@ namespace TestingSoftware.Protocols.Bluetoolth
         public const int RX_BUF_SIZE = 32 * 1024;
 
         [XmlIgnore]
-        public static GattCharacteristic? _writeCharacteristic;
+        public GattCharacteristic? _writeCharacteristic;
         [XmlIgnore]
-        public static GattCharacteristic? _notifyCharacteristic;
+        public GattCharacteristic? _notifyCharacteristic;
 
-
+        /// <summary>
+        /// The receive parsing task.
+        /// </summary>
+        [XmlIgnore]
+        protected Task? _rxParseTask;
         public BluetoothDataLink() : base(Layer.Datalink, "BluetoothDataLink")
         {
             // Create the transmitting and receiving channels.
@@ -137,6 +143,68 @@ namespace TestingSoftware.Protocols.Bluetoolth
                 });
             }
 
+            // Create the receive parsing task.
+            if (_rxParseTask == null)
+            {
+                _rxParseTask = Task.Run(async () =>
+                {
+                    while (!_cts.Token.IsCancellationRequested)
+                    {
+                        var number = 0;
+                        Int64 _lastTimes = 0;
+                        // Parse the pdus in thread pool.
+                        try
+                        {
+
+                            while (true)
+                            {
+                                Pdu? pdu = new Pdu();
+
+                                // Try to parse out the pdu from the receiving buffer.
+                                pdu.Data = _rxBuffer.ParsePdu();
+
+                                // There is not entire PDU in the receiving buffer. Exit.
+                                if (pdu.Data == null) break;
+                                if (StartPasePduTime == 0)
+                                {
+                                    StartPasePduTime = HighResolutionTimer.Milliseconds;
+                                    if (LastPasePduTime == 0)
+                                    {
+                                        LastPasePduTime = StartPasePduTime;
+                                    }
+                                }
+                                //Log.Information($"Bluetooth Rx: Time:{_lastTimes} {number}");
+                                if (_lastTimes != 0 && number >= 1)
+                                {
+                                    pdu.Timestamp = _lastTimes + number * 10; // Add the time offset for each pdu.
+                                    number++;
+                                }
+                                else
+                                {
+                                    number = 1;
+                                    pdu.Timestamp = HighResolutionTimer.Milliseconds - StartPasePduTime;
+                                    LastPasePduTime = HighResolutionTimer.Milliseconds;
+                                    _lastTimes = pdu.Timestamp;
+                                }
+
+                                //Log.Information($"Bluetooth Rx: Time:{HighResolutionTimer.Milliseconds - LastPasePduTime}");
+
+                                // Dispatch the received pdu to high level protocol.
+                                if (!OnPduReceived(pdu))
+                                {
+                                    await _rxChannel.Writer.WriteAsync(pdu);
+                                }
+                                // Log.Information($"Bluetooth Rx: Data:{formated}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Failed to parse the PDU from the UART receive buffer");
+                        }
+                    }
+                });
+            }
+
             return ret;
         }
 
@@ -147,163 +215,20 @@ namespace TestingSoftware.Protocols.Bluetoolth
             _notifyCharacteristic = notifyCharacteristic;
         }
         int pduNumber = 0;
+        Int64 LastPasePduTime = 0;
+        Int64 StartPasePduTime = 0;
         private void OnDataReceived(GattCharacteristic sender, GattValueChangedEventArgs evt)
         {
+
             byte[] data = evt.CharacteristicValue.ToArray();
             //string formated = BitConverter.ToString(data);
             //Log.Information($"Bluetooth Rx: Data:{formated}");
             _rxBuffer.AddData(data);
 
-            // Parse the pdus in thread pool.
-            try
-            {
 
-                while (true)
-                {
-                    Pdu? pdu = new Pdu();
-
-                    // Try to parse out the pdu from the receiving buffer.
-                    pdu.Data = _rxBuffer.ParsePdu();
-                   
-                    // There is not entire PDU in the receiving buffer. Exit.
-                    if (pdu.Data == null) break;
-                    //string formated1 = BitConverter.ToString(pdu.Data);
-                    //Log.Information($"PDU.DATA:{formated1}");
-                    pdu.Timestamp += pduNumber * 10; // Add the time offset for each pdu.
-
-                    pduNumber++;
-
-
-                    // Dispatch the received pdu to high level protocol.
-                    if (!OnPduReceived(pdu))
-                    {
-                        _rxChannel.Writer.WriteAsync(pdu);
-                    }
-                    // Log.Information($"Bluetooth Rx: Data:{formated}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Failed to parse the PDU from the UART receive buffer");
-            }
 
         }
-        ///// <summary>
-        ///// 尝试从给定的缓冲区中解析出一个完整的 PDU
-        ///// </summary>
-        ///// <param name="buffer">接收缓冲区数组</param>
-        ///// <param name="length">当前缓冲区中有效数据的长度</param>
-        ///// <returns>解析成功返回 Pdu 对象，否则返回 null</returns>
-        //private Pdu? ParsePdu(byte[] buffer, int length)
-        //{
-        //    // 最短合法 PDU 长度：帧头2 + 长度2 + 校验和2 = 6字节
-        //    if (length < 6) return null;
 
-        //    int offset = 0;
-
-        //    while (offset + 1 < length)
-        //    {
-        //        // 第一步：寻找帧头 0x55 0xAA
-        //        while (offset + 1 < length)
-        //        {
-        //            if (buffer[offset] == 0x55 && buffer[offset + 1] == 0xAA)
-        //            {
-        //                break; // 找到帧头
-        //            }
-        //            offset++;
-        //        }
-
-        //        // 剩余数据里找不到任何帧头
-        //        if (offset + 1 >= length)
-        //        {
-        //            // 丢弃前面所有已扫描的无用数据
-        //            if (offset > 0)
-        //            {
-        //                Array.Copy(buffer, offset, buffer, 0, length - offset);
-        //                _rxBufferLength = length - offset;
-        //            }
-        //            return null;
-        //        }
-
-        //        // 记录帧头起始位置
-        //        int headerOffset = offset;
-        //        offset += 2; // 跳过帧头 0x55 0xAA
-
-        //        // 第二步：判断长度字段是否已经收到完整（2字节）
-        //        if (offset + 2 > length)
-        //        {
-        //            // 长度字段不完整 → 保留从本次帧头开始的数据
-        //            if (headerOffset > 0)
-        //            {
-        //                Array.Copy(buffer, headerOffset, buffer, 0, length - headerOffset);
-        //                _rxBufferLength = length - headerOffset;
-        //            }
-        //            return null;
-        //        }
-
-        //        // 第三步：读取有效载荷长度（大端序）
-        //        int payloadLength = (buffer[offset] << 8) | buffer[offset + 1];
-        //        int pduTotalLength = payloadLength + 6; // 总长度 = 头2 + 长度2 + 载荷 + 校验2
-
-        //        // 第四步：判断整个 PDU 是否已经全部到达
-        //        if (headerOffset + pduTotalLength > length)
-        //        {
-        //            // 数据还不完整 → 保留从本次帧头开始的部分
-        //            if (headerOffset > 0)
-        //            {
-        //                Array.Copy(buffer, headerOffset, buffer, 0, length - headerOffset);
-        //                _rxBufferLength = length - headerOffset;
-        //            }
-        //            return null;
-        //        }
-
-        //        // 第五步：校验和验证
-        //        byte[] payload = new byte[payloadLength];
-        //        Array.Copy(buffer, headerOffset + 4, payload, 0, payloadLength);
-
-        //        // 接收到的校验和（大端序）
-        //        UInt16 receivedChecksum = (UInt16)(
-        //            (buffer[headerOffset + 4 + payloadLength] << 8) |
-        //            buffer[headerOffset + 5 + payloadLength]
-        //        );
-
-        //        // 计算校验和（从长度字段开始，到载荷结束，共 payloadLength + 2 字节）
-        //        UInt16 calculatedChecksum = CalcChecksum(buffer, headerOffset + 2, payloadLength + 2);
-
-        //        if (receivedChecksum != calculatedChecksum)
-        //        {
-        //            // 校验失败 → 认为这个 0x55AA 不是有效的帧头，跳过它继续找下一个
-        //            offset = headerOffset + 2;
-        //            continue;
-        //        }
-
-        //        // 第六步：构造有效的 PDU 对象
-        //        Pdu pdu = new Pdu
-        //        {
-        //            Data = payload,
-        //            Timestamp = HighResolutionTimer.Milliseconds - _startTime
-        //        };
-
-        //        // 第七步：移除已解析完成的 PDU 数据，滑动窗口前进
-        //        int remaining = length - (headerOffset + pduTotalLength);
-        //        if (remaining > 0)
-        //        {
-        //            Array.Copy(buffer, headerOffset + pduTotalLength, buffer, 0, remaining);
-        //        }
-        //        _rxBufferLength = remaining;
-
-        //        return pdu;
-        //    }
-
-        //    // 整个缓冲区扫描完毕仍未找到有效 PDU
-        //    // （通常意味着全是垃圾数据或只有不完整的残片）
-        //    if (length > 0)
-        //    {
-        //        _rxBufferLength = 0; // 清空缓冲区
-        //    }
-
-        //    return null;
-        //}
         /// <summary>
         /// Stop the transmitting task.
         /// </summary>
@@ -349,6 +274,21 @@ namespace TestingSoftware.Protocols.Bluetoolth
                     {
                         _txTask = null;
                     }
+                }
+            }
+            // Stop the receive parsing task.
+            if (_rxParseTask != null)
+            {
+                try
+                {
+                    await _rxParseTask;
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                finally
+                {
+                    _rxParseTask = null;
                 }
             }
 
@@ -401,16 +341,16 @@ namespace TestingSoftware.Protocols.Bluetoolth
                 IBuffer ibuffer = buffer.AsBuffer();
 
                 GattCommunicationStatus status = Task.Run(async () =>
+                {
+                    //string formated = BitConverter.ToString(buffer);
+                    //Log.Information($"Bluetooth Tx: Data:{formated}");
+                    GattCommunicationStatus state = await _writeCharacteristic.WriteValueAsync(ibuffer, GattWriteOption.WriteWithResponse);
+                    if (state == GattCommunicationStatus.Success)
                     {
-                        //string formated = BitConverter.ToString(buffer);
-                        //Log.Information($"Bluetooth Tx: Data:{formated}");
-                        GattCommunicationStatus state = await _writeCharacteristic.WriteValueAsync(ibuffer, GattWriteOption.WriteWithResponse);
-                        if (state == GattCommunicationStatus.Success)
-                        {
-                            // Log.Debug("发送成功");
-                        }
-                        return state;
-                    }).Result;
+                        // Log.Debug("发送成功");
+                    }
+                    return state;
+                }).Result;
 
                 result = status == GattCommunicationStatus.Success ? 0 : -1;
             }

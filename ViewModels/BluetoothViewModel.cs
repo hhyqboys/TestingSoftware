@@ -141,13 +141,6 @@ namespace TestingSoftware.ViewModels
                 return;
 
             string deviceName = adv.LocalName;
-            //if (string.IsNullOrWhiteSpace(deviceName))
-            if (string.IsNullOrWhiteSpace(deviceName) || !deviceName.StartsWith("SM", StringComparison.OrdinalIgnoreCase))
-            {
-                deviceName = "未知设备";
-                return;
-            }
-
             ulong btAddress = args.BluetoothAddress;
             short Rssi = args.RawSignalStrengthInDBm;
             string addressStr = string.Join(":", BitConverter.GetBytes(btAddress)
@@ -155,6 +148,21 @@ namespace TestingSoftware.ViewModels
                 .Take(8)
                 .Select(b => b.ToString("X2")));
             Log.Information($"发现设备：{deviceName}，地址：{addressStr}，蓝牙地址：{btAddress}，信号强度：{Rssi}");
+
+            //if (string.IsNullOrWhiteSpace(deviceName))
+            if (string.IsNullOrWhiteSpace(deviceName) || !deviceName.StartsWith("SM", StringComparison.OrdinalIgnoreCase))
+            {
+                deviceName = "未知设备";
+                return;
+            }
+
+            //ulong btAddress = args.BluetoothAddress;
+            //short Rssi = args.RawSignalStrengthInDBm;
+            //string addressStr = string.Join(":", BitConverter.GetBytes(btAddress)
+            //    .Reverse()
+            //    .Take(8)
+            //    .Select(b => b.ToString("X2")));
+            //Log.Information($"发现设备：{deviceName}，地址：{addressStr}，蓝牙地址：{btAddress}，信号强度：{Rssi}");
             var info = new BluetoothInfo
             {
                 Name = deviceName,

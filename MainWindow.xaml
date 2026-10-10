@@ -319,6 +319,7 @@
                 VerticalAlignment="Center"
                 FontSize="25"
                 GotFocus="ScanSnTextBox_GotFocus"
+                InputMethod.IsInputMethodEnabled="False"
                 KeyDown="ScanSnTextBox_KeyDown"
                 Text="{Binding ScanSn}" />
             <TextBlock

@@ -205,7 +205,6 @@ namespace TestingSoftware.ViewModels
         // 缓冲区大小可设为 8KB~64KB，根据日志量和内存情况调整
         private int LogbufferSize = 8192;
         private StreamWriter? writer;
-        private bool _seq = false;
         private string signalDataLogFile = string.Empty;
         private int writeCount = 0;
 
@@ -607,12 +606,12 @@ namespace TestingSoftware.ViewModels
 
                 case SignalModel.S16:
                     Int16 s16 = DiagService.SwapS16(reader.ReadInt16());
-                    _value = f32 = _model.Affine != null ? (float)_model.Affine.Foward(s16) : s16;
+                    _value = f32 = _model.Affine != null ? (Int16)_model.Affine.Foward(s16) : s16;
                     break;
 
                 case SignalModel.U16:
                     UInt16 u16 = DiagService.Swap16(reader.ReadUInt16());
-                    _value = f32 = _model.Affine != null ? (float)_model.Affine.Foward(u16) : u16;
+                    _value = f32 = _model.Affine != null ? (UInt16)_model.Affine.Foward(u16) : u16;
 
                     break;
 

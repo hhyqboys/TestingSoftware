@@ -7,7 +7,7 @@
   <!-- 格式：主版本.次版本.修订号.构建号                           -->
   <!-- ============================================================ -->
   <PropertyGroup>
-    <InstallerVersion>1.0.19.0</InstallerVersion>
+    <InstallerVersion>1.0.20.0</InstallerVersion>
   </PropertyGroup>
 
   <!-- 默认平台：未指定或 AnyCPU 时自动使用 x64 -->
@@ -74,10 +74,12 @@
       - $(_MainTargetFramework)：主项目目标框架，定义于上方 PropertyGroup
       收集到的文件归入 TestingSoftwareFiles 组件组，安装到 INSTALLFOLDER
     -->
-    <HarvestDirectory Include="..\bin\$(Platform)\$(Configuration)\$(_MainTargetFramework)\">
+    <HarvestDirectory Include="..\bin\$(Configuration)\$(_MainTargetFramework)\">
       <ComponentGroupName>TestingSoftwareFiles</ComponentGroupName>
       <DirectoryRefId>INSTALLFOLDER</DirectoryRefId>
       <SuppressRootDirectory>true</SuppressRootDirectory>
+      <!-- 通过 XSLT 过滤收集结果，排除 TestingSoftware.pdb（所有 *.pdb）组件 -->
+      <Transforms>$(MSBuildThisFileDirectory)ExcludePdb.xslt</Transforms>
     </HarvestDirectory>
   </ItemGroup>
 
@@ -92,12 +94,12 @@
     构建后验证 TestingSoftware.exe 存在，避免 Heat 因目录为空被静默跳过
   -->
   <Target Name="EnsureTestingSoftwareBuilt" BeforeTargets="Harvest">
-    <Exec Command="dotnet build ..\TestingSoftware.csproj -c $(Configuration) -p:Platform=$(Platform) --nologo -v:minimal"
+    <Exec Command="dotnet build ..\TestingSoftware.csproj -c $(Configuration) --nologo -v:minimal"
           WorkingDirectory="$(MSBuildThisFileDirectory)"
           YieldDuringToolExecution="true" />
 
-    <Error Condition="!Exists('..\bin\$(Platform)\$(Configuration)\$(_MainTargetFramework)\TestingSoftware.exe')"
-           Text="未找到主项目输出文件 TestingSoftware.exe。&#xA;查找路径：..\bin\$(Platform)\$(Configuration)\$(_MainTargetFramework)\TestingSoftware.exe&#xA;主项目已尝试自动构建（平台=$(Platform)，配置=$(Configuration)，目标框架=$(_MainTargetFramework)）但输出文件缺失。&#xA;请检查上方 dotnet build 的编译错误，常见原因：&#xA;  1) Lib\x64\vbac.dll 和 Lib\x86\vbac.dll 文件不存在（主项目将其作为嵌入资源引用）&#xA;  2) 主项目代码有编译错误&#xA;  3) 当前平台 $(Platform) 不被主项目支持" />
+    <Error Condition="!Exists('..\bin\$(Configuration)\$(_MainTargetFramework)\TestingSoftware.exe')"
+           Text="未找到主项目输出文件 TestingSoftware.exe。&#xA;查找路径：..\bin\$(Configuration)\$(_MainTargetFramework)\TestingSoftware.exe&#xA;主项目已尝试自动构建（配置=$(Configuration)，目标框架=$(_MainTargetFramework)）但输出文件缺失。&#xA;请检查上方 dotnet build 的编译错误，常见原因：&#xA;  1) Lib\x64\vbac.dll 和 Lib\x86\vbac.dll 文件不存在（主项目将其作为嵌入资源引用）&#xA;  2) 主项目代码有编译错误" />
   </Target>
 
 </Project>

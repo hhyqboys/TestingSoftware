@@ -245,7 +245,7 @@ namespace TestingSoftware.ViewModels
             }
             return _modelSerializer;
         }
-        private bool _isScanning = true;   
+        private bool _isScanning = true;
         public bool IsScanning
         {
             get => _isScanning;
@@ -517,7 +517,7 @@ namespace TestingSoftware.ViewModels
             }
             ChangeUI();
         });
-        
+
         /// <summary>
         /// The method is to connect to a Bluetooth device.
         /// </summary>
@@ -715,12 +715,20 @@ namespace TestingSoftware.ViewModels
                     var defaultPort = SerialPortList.FirstOrDefault();
                     if (defaultPort != null) SelectedSerialPort = defaultPort;
                 }
+
                 if (!string.IsNullOrEmpty(SelectedSerialPort)) _modBusService.Start(SelectedSerialPort);
                 else
                 {
                     Status = -1;
                     TestStatusInfo = $"请选择串口";
                     return;
+                }
+            }
+            else
+            {
+                if (!_modBusService.IsConnected)
+                {
+                    if (string.IsNullOrEmpty(SelectedSerialPort)) { _modBusService.Stop(); _modBusService.Start(SelectedSerialPort); }
                 }
             }
             await _udsService.StopAsync();
@@ -736,18 +744,24 @@ namespace TestingSoftware.ViewModels
                 _jobCts?.Cancel();
             }, token);
         }, _ => IsDeviceConnected && !IsTesting);
-
+        private VbaService? can = null;
         private int ExecuCan(Job job, CancellationToken token)
         {
             // 目标远程帧 ID（十进制；如需十六进制写 0x65、0x66、0x67）
             uint[] targetIds = { 0x101, 0x115, 0x100 };
             int cycleCount = 0;
-            VbaService can = null;
+
             try
             {
                 // ========== 只打开一次设备 ==========
+                if (can != null)
+                {
+                    can.CloseDevice();
+                    can = null;
+                }
                 can = new VbaService();
-                int ret = can.OpenDevice(channel: 0, baudRate: 500000);
+                var canBaudRate = Model?.CanBaudRate ?? 500000;
+                int ret = can.OpenDevice(channel: 0, baudRate: canBaudRate);
                 if (ret != 0)
                 {
                     Log.Debug($"打开失败，错误码: {(VbaStatus)ret}");
@@ -801,12 +815,13 @@ namespace TestingSoftware.ViewModels
                     try
                     {
                         can.CloseDevice();
+                        can = null;
                     }
                     catch (Exception exClose)
                     {
                         Log.Debug(exClose, "关闭CAN设备时发生异常");
                     }
-                    can.Dispose(); // 如果VbaService实现IDisposable，调用释放
+                    //can.Dispose(); // 如果VbaService实现IDisposable，调用释放
                 }
             }
         }
@@ -1040,7 +1055,7 @@ namespace TestingSoftware.ViewModels
                 for (int jobIndex = 0; jobIndex < VisibleJobs.Count; jobIndex++)
                 {
                     var job = VisibleJobs[jobIndex];
-                  
+
                     // =========复测核心：下标小于起始下标，直接跳过不执行=========
                     if (jobIndex < _retestStartIndex)
                     {
@@ -1222,13 +1237,25 @@ namespace TestingSoftware.ViewModels
                                                     if (sigv.Value != null)
                                                     {
                                                         Log.Information($"{sigv.Name}:{sigv.Expectation} {sigv.Tolerance}");
+                                                        int _ret;
                                                         switch (signal.Type)
                                                         {
                                                             case 0:
                                                                 JobStatusChanged(job, JOB_RUNNING);
                                                                 break;
                                                             case 2:
-                                                                byte _v8 = byte.Parse(signal.Value ?? "00");
+                                                                _ret = CheckStringDataType(signal.Value);
+
+                                                                byte _v8;
+                                                                if (_ret == 0)
+                                                                {
+                                                                    _v8 = byte.Parse(signal.Value ?? "00");
+                                                                }
+                                                                else
+                                                                {
+                                                                    double.TryParse(signal.Value ?? "00", out double temp);
+                                                                    _v8 = (byte)temp;
+                                                                }
                                                                 if (_v8 < sigv.Expectation - sigv.Tolerance || _v8 > sigv.Expectation + sigv.Tolerance)
                                                                 {
                                                                     var smsg = PaseSigalErrorMsg(signal, _v8);
@@ -1241,7 +1268,18 @@ namespace TestingSoftware.ViewModels
                                                                 JobStatusChanged(job, JOB_RUNNING);
                                                                 break;
                                                             case 3:
-                                                                UInt16 _vu16 = UInt16.Parse(signal.Value ?? "00");
+                                                                _ret = CheckStringDataType(signal.Value);
+
+                                                                UInt16 _vu16;
+                                                                if (_ret == 0)
+                                                                {
+                                                                    _vu16 = UInt16.Parse(signal.Value ?? "00");
+                                                                }
+                                                                else
+                                                                {
+                                                                    double.TryParse(signal.Value ?? "00", out double temp);
+                                                                    _vu16 = (UInt16)temp;
+                                                                }
                                                                 if (_vu16 < sigv.Expectation - sigv.Tolerance || _vu16 > sigv.Expectation + sigv.Tolerance)
                                                                 {
                                                                     var smsg = PaseSigalErrorMsg(signal, _vu16);
@@ -1256,7 +1294,18 @@ namespace TestingSoftware.ViewModels
                                                             case 4:
                                                             case 5:
                                                             case 6:
-                                                                int _vs16 = int.Parse(signal.Value ?? "00");
+                                                                int _vs16;
+                                                                _ret = CheckStringDataType(signal.Value);
+
+                                                                if (_ret == 0)
+                                                                {
+                                                                    _vs16 = int.Parse(signal.Value ?? "00");
+                                                                }
+                                                                else
+                                                                {
+                                                                    double.TryParse(signal.Value ?? "00", out double temp);
+                                                                    _vs16 = (int)temp;
+                                                                }
                                                                 if (_vs16 < sigv.Expectation - sigv.Tolerance || _vs16 > sigv.Expectation + sigv.Tolerance)
                                                                 {
                                                                     var smsg = PaseSigalErrorMsg(signal, _vs16);
@@ -1544,9 +1593,9 @@ namespace TestingSoftware.ViewModels
                                     }
                                     else if (diagService is Service10)
                                     {
-                                       Service10 service10 = (Service10) diagService;
-                                       var request = service10.BuildRequest();
-                                       var response = await _udsService.Request(request);
+                                        Service10 service10 = (Service10)diagService;
+                                        var request = service10.BuildRequest();
+                                        var response = await _udsService.Request(request);
                                     }
                                 }
                             }
@@ -1578,6 +1627,12 @@ namespace TestingSoftware.ViewModels
                         JobStatusChanged(job, JOB_FAIL, "任务终止:未知错误");
                         break;
                     }
+                    finally
+                    {
+                        _modBusService.WriteOutputCoils(0x00, [false, false, false, false, false, false, false, false], 0x30);
+                        _modBusService.WriteOutputCoils(0x00, [false, false, false, false], 0x31);
+                    }
+
                     // 终态（失败/停止）中断整条测试链
                     if (job.Status == JOB_FAIL || job.Status == JOB_STOPPED)
                     {
@@ -1597,7 +1652,8 @@ namespace TestingSoftware.ViewModels
                         OnPropertyChanged(nameof(BluetoothViewAdapter.SlaveDevices));
                         Status = JOB_PASS;
                         TestStatusInfo = result + "测试成功";
-
+                        SlaveDevices.Clear();
+                        SelectedSlaveDevInfo = new BluetoothInfo();
 
                     });
                 }
@@ -1615,7 +1671,28 @@ namespace TestingSoftware.ViewModels
                 Log.Error(ex, "Job测试主任务异常");
                 _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"Job测试主任务异常:{ex.Message}");
             }
+
             ChangeUI();
+        }
+
+        private int CheckStringDataType(string? input)
+        {
+            // 空/空白字符串直接未知
+            if (string.IsNullOrWhiteSpace(input))
+                return 2;
+
+            // 优先尝试整数
+            if (int.TryParse(input, out _))
+            {
+                return 0;
+            }
+            // 再尝试浮点(double)
+            if (double.TryParse(input, out _))
+            {
+                return 1;
+            }
+            // 都不行
+            return 2;
         }
 
         private string PaseSigalErrorMsg(SignalModel signal, object value)
@@ -1661,7 +1738,7 @@ namespace TestingSoftware.ViewModels
             // 位掩码 -> 中文故障名
             var map = new Dictionary<uint, string>
             {
-                [1] = "运行时长",
+                
                 [2] = "过压",
                 [4] = "欠压",
                 [8] = "过流",

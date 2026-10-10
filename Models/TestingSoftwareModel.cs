@@ -52,5 +52,10 @@ namespace TestingSoftware.Models
         /// The nominal bus voltage.
         /// </summary>
         public float NominalBusVoltage { get; set; } = 72.0f;
+
+        /// <summary>
+        /// the CAN bus baud rate for communication with the device.
+        /// </summary>
+        public int CanBaudRate { get; set; } = 500000;
     }
 }
