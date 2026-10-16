@@ -11,8 +11,6 @@ using System.Text;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Xml.Serialization;
-using TestingSoftware.Protocols;
-using TestingSoftware.Protocols.Bluetoolth;
 using TestingSoftware.Utilities;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
@@ -76,9 +74,9 @@ namespace TestingSoftware.Protocols.Bluetoolth
         public const int RX_BUF_SIZE = 32 * 1024;
 
         [XmlIgnore]
-        public GattCharacteristic? _writeCharacteristic;
+        public static GattCharacteristic? _writeCharacteristic;
         [XmlIgnore]
-        public GattCharacteristic? _notifyCharacteristic;
+        public static GattCharacteristic? _notifyCharacteristic;
 
         /// <summary>
         /// The receive parsing task.
@@ -221,8 +219,8 @@ namespace TestingSoftware.Protocols.Bluetoolth
         {
 
             byte[] data = evt.CharacteristicValue.ToArray();
-            //string formated = BitConverter.ToString(data);
-            //Log.Information($"Bluetooth Rx: Data:{formated}");
+            string formated = BitConverter.ToString(data);
+            Log.Information($"Bluetooth Rx: Data:{formated}");
             _rxBuffer.AddData(data);
 
 

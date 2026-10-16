@@ -1,4 +1,4 @@
-<Window
+﻿<Window
     x:Class="TestingSoftware.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -245,11 +245,12 @@
                         Margin="5"
                         VerticalAlignment="Center"
                         FontSize="20"
+                        IsEnabled="{Binding IsScanning}"
                         ItemsSource="{Binding SlaveDevices}"
                         SelectedItem="{Binding SelectedSlaveDevInfo}"
                         Style="{StaticResource DisabledComboBoxStyle}" />
                     <Button
-                        Width="120"
+                        Width="100"
                         Height="50"
                         Margin="5"
                         Padding="5,3,5,3"
@@ -257,30 +258,14 @@
                         BorderThickness="0"
                         Command="{Binding ScanAction}"
                         FontSize="20"
-                        ToolTip="点击开始/停止蓝牙扫描">
+                        ToolTip="Scan">
                         <StackPanel Orientation="Horizontal">
-                            <!--  扫描中：Codescan 放大镜图标  -->
                             <icon:PackIconOcticons
                                 Width="25"
                                 Height="25"
                                 Kind="Codescan"
-                                Style="{StaticResource xIcon}"
-                                Visibility="{Binding IsScanLooping, Converter={StaticResource BoolToVisibilityConverter}}" />
-                            <!--  已停止：Stop 方块图标  -->
-                            <icon:PackIconOcticons
-                                Width="25"
-                                Height="25"
-                                Kind="Stop"
-                                Style="{StaticResource xIcon}"
-                                Visibility="{Binding IsScanLooping, Converter={StaticResource BoolFalseToVisibilityConverter}}" />
-                            <TextBlock
-                                Margin="4,0,0,0"
-                                Text="扫描中"
-                                Visibility="{Binding IsScanLooping, Converter={StaticResource BoolToVisibilityConverter}}" />
-                            <TextBlock
-                                Margin="4,0,0,0"
-                                Text="已停止"
-                                Visibility="{Binding IsScanLooping, Converter={StaticResource BoolFalseToVisibilityConverter}}" />
+                                Style="{StaticResource xIcon}" />
+                            <TextBlock Margin="4,0,0,0" Text="扫描" />
                         </StackPanel>
                     </Button>
                 </StackPanel>

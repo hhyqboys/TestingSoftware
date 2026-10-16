@@ -552,8 +552,8 @@ namespace TestingSoftware.ViewModels
                     break;
 
                 case SignalModel.U32:
-                    UInt16 u32 = (Value as UInt16?) ?? 0;
-                    writer.Write(DiagService.Swap16(u32));
+                    UInt32 u32 = (Value as UInt32?) ?? 0;
+                    writer.Write(DiagService.Swap32(u32));
                     break;
 
                 case SignalModel.FLOAT:

@@ -43,8 +43,6 @@ namespace TestingSoftware.Adapters
         private readonly Guid newRxUuid = new Guid("0000FFF1-0000-1000-8000-00805F9B34FB"); // 通知特征（外设 → 主机）
         [XmlIgnore]
         private readonly Guid newTxUuid = new Guid("0000FFF2-0000-1000-8000-00805F9B34FB"); // 写特征（主机 → 外设）
-
-
         public SumartBluetoothAdapter()
         {
             Datalinks = new List<Datalink> { new BluetoothDataLink() };
@@ -118,10 +116,10 @@ namespace TestingSoftware.Adapters
                 _device = await BluetoothLEDevice.FromBluetoothAddressAsync(SelectedSlaveDevInfo.BluetoothAddress);
                 if (_device == null) return -1;
 
-                // ★ 关键：在这里订阅连接状态变化事件
+                //在这里订阅连接状态变化事件
                 _device.ConnectionStatusChanged += OnConnectionStatusChanged;
 
-                /* Old BLE */
+
                 var servicesResult = await _device.GetGattServicesForUuidAsync(serviceUuid);
                 if (servicesResult.Status == GattCommunicationStatus.Success && servicesResult.Services.Count > 0)
                 {
@@ -210,8 +208,6 @@ namespace TestingSoftware.Adapters
             {
                 return -1;
             }
-
-
 
 
             if (SelectedSlaveDevInfo.Address != null)
