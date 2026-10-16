@@ -265,6 +265,20 @@ namespace TestingSoftware.ViewModels
                 OnPropertyChanged(nameof(SelectedSlaveDevInfo));
             }
         }
+
+        private string _macAddressInput = string.Empty;
+        /// <summary>
+        /// 蓝牙MAC地址输入（不带冒号，12位十六进制）
+        /// </summary>
+        public string MacAddressInput
+        {
+            get => _macAddressInput;
+            set
+            {
+                _macAddressInput = (value ?? string.Empty).ToUpperInvariant();
+                OnPropertyChanged(nameof(MacAddressInput));
+            }
+        }
         #endregion
         /// <summary>
         /// 获取 AppData\Roaming\ElectricControl 路径，不存在则创建，返回绝对路径
@@ -546,6 +560,45 @@ namespace TestingSoftware.ViewModels
         public async Task<int> ConnectAsync()
         {
             int result = -1;
+
+            // 根据输入的MAC地址设置目标蓝牙设备（不带冒号，12位十六进制）
+            if (!string.IsNullOrWhiteSpace(MacAddressInput))
+            {
+                string macHex = MacAddressInput.Replace(":", "").Replace("-", "").Replace(" ", "").Trim();
+                if (macHex.Length != 12)
+                {
+                    Status = -1;
+                    TestStatusInfo = "蓝牙MAC地址格式错误，需12位十六进制字符";
+                    return -1;
+                }
+                try
+                {
+                    byte[] macBytes = new byte[6];
+                    for (int i = 0; i < 6; i++)
+                    {
+                        macBytes[i] = Convert.ToByte(macHex.Substring(i * 2, 2), 16);
+                    }
+                    // Windows BLE API 的 BluetoothAddress 为小端 ulong，需反转字节序
+                    Array.Reverse(macBytes);
+                    byte[] ulongBytes = new byte[8];
+                    Array.Copy(macBytes, ulongBytes, 6);
+                    ulong bluetoothAddress = BitConverter.ToUInt64(ulongBytes, 0);
+
+                    BluetoothViewAdapter.SelectedSlaveDevInfo = new BluetoothInfo
+                    {
+                        Name = "手动输入设备",
+                        Address = macHex,
+                        BluetoothAddress = bluetoothAddress
+                    };
+                    BluetoothInfo.macAddress = macHex;
+                }
+                catch (FormatException)
+                {
+                    Status = -1;
+                    TestStatusInfo = "蓝牙MAC地址包含非法十六进制字符";
+                    return -1;
+                }
+            }
 
             //_udsService.BuildStackFromDatalink(Project.BluetoothAdapter.Datalinks[0], SelectModeIndex);
             _udsService.BuildStackFromDatalink(BluetoothAdapter.Datalinks[0], 0);
