@@ -163,6 +163,8 @@
                     <TextBlock Margin="5" VerticalAlignment="Center" FontSize="20" Text="蓝牙MAC:" />
                     <TextBox Width="180" Height="40" Margin="5" VerticalAlignment="Center" FontSize="20"
                              MaxLength="12" InputMethod.IsInputMethodEnabled="False"
+                             GotFocus="MacAddressTextBox_GotFocus"
+                             KeyDown="MacAddressTextBox_KeyDown"
                              Text="{Binding MacAddressInput, UpdateSourceTrigger=PropertyChanged}" />
                 </StackPanel>
                 <!--  原蓝牙搜索ComboBox和扫描按钮已隐藏，保留代码以备恢复
