@@ -527,7 +527,11 @@ namespace TestingSoftware.ViewModels
             if (result != 0)
             {
                 Status = -1;
-                TestStatusInfo = $"设备打开关闭失败";
+                // 保留 ConnectAsync 中已设置的具体错误信息（如MAC格式错误），仅在无具体信息时显示通用提示
+                if (string.IsNullOrEmpty(TestStatusInfo) || TestStatusInfo == "未执行测试项目")
+                {
+                    TestStatusInfo = $"设备打开关闭失败";
+                }
             }
             ChangeUI();
         });
