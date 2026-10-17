@@ -277,6 +277,17 @@ namespace TestingSoftware.ViewModels
             {
                 _macAddressInput = (value ?? string.Empty).ToUpperInvariant();
                 OnPropertyChanged(nameof(MacAddressInput));
+                // 与SN一致：扫码回车(UpdateSource)后立即校验并在右侧提示框显示
+                if (!TryNormalizeMac(_macAddressInput, out string macHex, out string macError))
+                {
+                    Status = -1;
+                    TestStatusInfo = macError;
+                }
+                else if (!string.IsNullOrEmpty(macHex))
+                {
+                    Status = 0;
+                    TestStatusInfo = string.Empty;
+                }
             }
         }
         #endregion
@@ -568,40 +579,30 @@ namespace TestingSoftware.ViewModels
             // 根据输入的MAC地址设置目标蓝牙设备（不带冒号，12位十六进制）
             if (!string.IsNullOrWhiteSpace(MacAddressInput))
             {
-                string macHex = MacAddressInput.Replace(":", "").Replace("-", "").Replace(" ", "").Trim();
-                if (macHex.Length != 12)
+                if (!TryNormalizeMac(MacAddressInput, out string macHex, out string macError))
                 {
                     Status = -1;
-                    TestStatusInfo = "蓝牙MAC地址格式错误，需12位十六进制字符";
+                    TestStatusInfo = macError;
                     return -1;
                 }
-                try
+                byte[] macBytes = new byte[6];
+                for (int i = 0; i < 6; i++)
                 {
-                    byte[] macBytes = new byte[6];
-                    for (int i = 0; i < 6; i++)
-                    {
-                        macBytes[i] = Convert.ToByte(macHex.Substring(i * 2, 2), 16);
-                    }
-                    // Windows BLE API 的 BluetoothAddress 为小端 ulong，需反转字节序
-                    Array.Reverse(macBytes);
-                    byte[] ulongBytes = new byte[8];
-                    Array.Copy(macBytes, ulongBytes, 6);
-                    ulong bluetoothAddress = BitConverter.ToUInt64(ulongBytes, 0);
+                    macBytes[i] = Convert.ToByte(macHex.Substring(i * 2, 2), 16);
+                }
+                // Windows BLE API 的 BluetoothAddress 为小端 ulong，需反转字节序
+                Array.Reverse(macBytes);
+                byte[] ulongBytes = new byte[8];
+                Array.Copy(macBytes, ulongBytes, 6);
+                ulong bluetoothAddress = BitConverter.ToUInt64(ulongBytes, 0);
 
-                    BluetoothViewAdapter.SelectedSlaveDevInfo = new BluetoothInfo
-                    {
-                        Name = "手动输入设备",
-                        Address = macHex,
-                        BluetoothAddress = bluetoothAddress
-                    };
-                    BluetoothInfo.macAddress = macHex;
-                }
-                catch (FormatException)
+                BluetoothViewAdapter.SelectedSlaveDevInfo = new BluetoothInfo
                 {
-                    Status = -1;
-                    TestStatusInfo = "蓝牙MAC地址包含非法十六进制字符";
-                    return -1;
-                }
+                    Name = "手动输入设备",
+                    Address = macHex,
+                    BluetoothAddress = bluetoothAddress
+                };
+                BluetoothInfo.macAddress = macHex;
             }
 
             //_udsService.BuildStackFromDatalink(Project.BluetoothAdapter.Datalinks[0], SelectModeIndex);
@@ -708,6 +709,39 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         /// <param name="sn">扫码得到的SN</param>
         /// <returns>true=格式合法</returns>
+        /// <summary>
+        /// 规范化蓝牙MAC输入：去除冒号/横线/空格，校验12位合法十六进制。
+        /// 成功返回标准化12位hex到macHex；失败时macHex为空、error为提示文案。空输入视为通过且不报错。
+        /// </summary>
+        private bool TryNormalizeMac(string raw, out string macHex, out string error)
+        {
+            macHex = string.Empty;
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return true;
+            }
+            macHex = raw.Replace(":", "").Replace("-", "").Replace(" ", "").Trim().ToUpperInvariant();
+            if (macHex.Length != 12)
+            {
+                error = "蓝牙MAC地址格式错误，需12位十六进制字符";
+                return false;
+            }
+            try
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    Convert.ToByte(macHex.Substring(i * 2, 2), 16);
+                }
+            }
+            catch (FormatException)
+            {
+                error = "蓝牙MAC地址包含非法十六进制字符";
+                return false;
+            }
+            return true;
+        }
+
         private bool IsValidSnFormat(string sn)
         {
             if (string.IsNullOrWhiteSpace(sn))
