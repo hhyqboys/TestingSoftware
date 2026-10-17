@@ -567,7 +567,8 @@ namespace TestingSoftware.ViewModels
 
             // 根据输入的MAC地址设置目标蓝牙设备（不带冒号，12位十六进制）
             if (!string.IsNullOrWhiteSpace(MacAddressInput))
-            {
+            { 
+                TestStatusInfo = "";
                 string macHex = MacAddressInput.Replace(":", "").Replace("-", "").Replace(" ", "").Trim();
                 if (macHex.Length != 12)
                 {
