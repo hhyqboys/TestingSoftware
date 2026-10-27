@@ -1,4 +1,4 @@
-
+﻿
 using Serilog;
 using TestingSoftware.Protocols.Bluetoolth;
 using System.Threading.Channels;
