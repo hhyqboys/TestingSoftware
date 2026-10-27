@@ -365,7 +365,7 @@ namespace TestingSoftware.ViewModels
                         App.isPause = false;
                         SetConnectionState(false);
                         Log.Error(
-                            "蓝牙连接意外断开，请检查蓝牙状态后重新连接！!!",
+                            "蓝牙连接意外断开，请检查蓝牙状态后重新连接！!",
                             "蓝牙断开",
                             MessageBoxButton.OK,
                             MessageBoxImage.Warning
@@ -394,10 +394,10 @@ namespace TestingSoftware.ViewModels
             _testRecordService = testRecordService;
 
             //// 测试成功
-            //OnDeviceTestFinished("SN-0001", "AA:BB:CC:DD:EE:FF", true, "");
+            //OnDeviceTestFinished("SN‑0001", "AA:BB:CC:DD:EE:FF", true, "");
 
             //// 测试失败
-            //OnDeviceTestFinished("SN-0002", "AA:BB:CC:DD:EE:01", false, "蓝牙连接超时，无应答");
+            //OnDeviceTestFinished("SN‑0002", "AA:BB:CC:DD:EE:01", false, "蓝牙连接超时，无应答");
         }
 
         /// <summary>
@@ -1522,7 +1522,7 @@ namespace TestingSoftware.ViewModels
                                                 Log.Information($"执行任务失败:{job.JobName},解锁失败");
                                                 break;
                                             }
-                                            //重要：原来BuildPayload内部调用Wait会卡死，重构，不要在委托内部Wait！
+                                            //重要：原来BuildPayload回调内部调用Wait会卡死，重构，不要在委托内部Wait！
                                             service2e.BuildPayload = writer =>
                                             {
                                                 byte[] data = { 0 };
