@@ -1,7 +1,8 @@
-﻿
+
 using Serilog;
 using TestingSoftware.Protocols.Bluetoolth;
 using System.Threading.Channels;
+using TestingSoftware.Utilities;
 
 namespace TestingSoftware.Protocols.Diag
 {
@@ -49,6 +50,12 @@ namespace TestingSoftware.Protocols.Diag
         /// The periodical data identifier list for service 2A
         /// </summary>
         public byte Pid { get; set; }
+
+        /// <summary>
+        /// 最近一次正常（非3E）UDS请求的发送时刻（HighResolutionTimer.Milliseconds）。
+        /// 用于 3E80 保活发送前检查与正常数据之间 1.5s 的静默间隔。
+        /// </summary>
+        public long LastNormalRequestMs { get; private set; } = -1;
         /// <summary>
         /// Is supported positive suppressed or not.
         /// </summary>
@@ -1370,6 +1377,12 @@ namespace TestingSoftware.Protocols.Diag
                     Log.Error(ex, "Failed to transmit the UDS request");
 
                     return null;
+                }
+
+                // 记录最近一次正常（非3E）请求的发送时刻，供 3E80 保活避开该时间窗
+                if (result == 0 && pdu.Data != null && !Service3e.IsUdsTesterPresent(pdu.Data))
+                {
+                    LastNormalRequestMs = HighResolutionTimer.Milliseconds;
                 }
 
                 /* Check the request is positive suppressed or not. */
