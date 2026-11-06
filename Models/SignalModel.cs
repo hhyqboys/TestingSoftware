@@ -276,7 +276,21 @@ namespace TestingSoftware.Models
         /// The all available affines transform.
         /// </summary>
         [XmlIgnore]
-        public List<Affine> Affines => new List<Affine>
+        public List<Affine> _affines = new List<Affine> { };
+      
+        /// <summary>
+        /// The all available affines transform.
+        /// </summary>
+        [XmlIgnore]
+        public List<Affine> Affines 
+        {
+            get => _affines;
+            set => _affines = value;
+        }
+
+        public void UpdateAffine()
+        {
+            Affines = new List<Affine>
         {
             new Affine
             {
@@ -324,6 +338,7 @@ namespace TestingSoftware.Models
                 K = 1,
             }
         };
+        }
         /// <summary>
         /// 
         /// </summary>

@@ -456,6 +456,7 @@ namespace TestingSoftware.ViewModels
                                 sig.VbusAop = loadedModel.VbusAop;
                                 sig.AdcRefVolt = loadedModel.AdcRefVolt;
                                 sig.NominalBusVoltage = loadedModel.NominalBusVoltage;
+                                sig.UpdateAffine();
                                 sig.BuildReferences();
                                 job.SignalViewModels.Add(new SignalViewModel(sig));
                             }
