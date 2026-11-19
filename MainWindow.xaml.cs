@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -56,14 +56,56 @@ namespace TestingSoftware
 
         private void MacAddressTextBox_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.Key == Key.Enter)
+            if (e.Key == Key.Enter || e.Key == Key.Return)
             {
                 var textBox = sender as TextBox;
-                // 强制把当前输入写回 MacAddressInput
+                if (textBox == null) return;
+
+                // 强制把当前输入写回 MacAddressInput（触发ViewModel里的MAC校验与提示）
                 textBox.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
-                textBox.SelectAll();
                 e.Handled = true;   // 防止系统发出"叮"的声音
+
+                // 扫码结束：MAC 合法则光标自动跳到 SN 输入框，便于连扫；不合法留在MAC框重新扫
+                if (IsValidMacInput(textBox.Text))
+                {
+                    MoveFocusToSnTextBox();
+                }
+                else
+                {
+                    textBox.SelectAll();
+                }
             }
+        }
+
+        /// <summary>
+        /// 扫码后的MAC合法性判断：去掉冒号/横线/空格后必须是12位十六进制（空视为未扫，不通过）。
+        /// </summary>
+        private static bool IsValidMacInput(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return false;
+            string macHex = raw.Replace(":", "").Replace("-", "").Replace(" ", "").Trim();
+            if (macHex.Length != 12) return false;
+            foreach (char c in macHex)
+            {
+                bool isHex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                if (!isHex) return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// 把输入焦点切到 SN 框并全选。延迟到当前按键/绑定更新处理完之后再切，
+        /// 避免扫码枪连发时尾部字符被吞掉。
+        /// </summary>
+        private void MoveFocusToSnTextBox()
+        {
+            if (ScanSnTextBox == null) return;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                // SN框 GotFocus 里会清空旧内容，扫码枪下一次扫码直接覆盖
+                Keyboard.Focus(ScanSnTextBox);
+                ScanSnTextBox.SelectAll();
+            }), System.Windows.Threading.DispatcherPriority.Input);
         }
     }
 }
