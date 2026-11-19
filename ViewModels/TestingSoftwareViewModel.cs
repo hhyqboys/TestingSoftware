@@ -17,6 +17,7 @@ using TestingSoftware.Protocols;
 using TestingSoftware.Protocols.Diag;
 using TestingSoftware.Services;
 using TestingSoftware.Utilities;
+using Windows.Foundation.Collections;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using Application = System.Windows.Application;
 using MessageBox = System.Windows.MessageBox;
@@ -1732,6 +1733,7 @@ namespace TestingSoftware.ViewModels
 
                         _modBusService.WriteOutputCoils(0x00, [false, false, false, false, false, false, false, false], 0x30);
                         _modBusService.WriteOutputCoils(0x00, [false, false, false, false], 0x31);
+                        _modBusService.WriteAoMultiRegisters(0x00, [0x00,0x00,0x00,0x00], 0x30);
                         }
                         catch
                         {
