@@ -938,6 +938,60 @@ namespace TestingSoftware.ViewModels
             _modBusService.WriteAoMultiRegisters(service.StartAddress, values, service.SlaveId);
         }
 
+        /// <summary>
+        /// 递归收集某任务声明的复测前置任务下标（支持前置任务自己再声明前置任务）。
+        /// 只接受复测起点之前的任务，避免反向补跑或把任务自己补跑一遍。
+        /// </summary>
+        private void CollectPrerequisiteIndices(Job job, HashSet<int> indices, int depth)
+        {
+            if (job?.Prerequisites == null || job.Prerequisites.Count == 0 || depth > 8)
+                return;
+
+            foreach (var key in job.Prerequisites)
+            {
+                int idx = FindJobIndex(key);
+                if (idx < 0)
+                {
+                    Log.Warning($"任务[{job.JobName}]的前置任务[{key}]未找到，已忽略");
+                    continue;
+                }
+                if (idx >= _retestStartIndex)
+                {
+                    Log.Warning($"任务[{job.JobName}]的前置任务[{key}]不在复测起点之前，已忽略");
+                    continue;
+                }
+                if (!indices.Add(idx))
+                    continue;
+
+                CollectPrerequisiteIndices(VisibleJobs[idx], indices, depth + 1);
+            }
+        }
+
+        /// <summary>
+        /// 按任务名称（JobName）或任务序号（SerialNumber）查找任务下标，找不到返回 -1。
+        /// </summary>
+        private int FindJobIndex(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                return -1;
+
+            string k = key.Trim();
+
+            for (int i = 0; i < VisibleJobs.Count; i++)
+            {
+                if (string.Equals((VisibleJobs[i].JobName ?? string.Empty).Trim(), k, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+
+            for (int i = 0; i < VisibleJobs.Count; i++)
+            {
+                if (string.Equals((VisibleJobs[i].SerialNumber ?? string.Empty).Trim(), k, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+
+            return -1;
+        }
+
         /// <summary>状态常量：0空闲 1测试中 2通过 -1失败 -2重试中 -3手动停止</summary>
         public void JobStatusChanged(Job job, int status, string? info = null, bool canRetry = false)
         {
@@ -1170,12 +1224,26 @@ namespace TestingSoftware.ViewModels
                 }, token3E80);
                 await Task.Delay(1000, ct);
 
+                // ===== 复测前置任务：补跑目标Job声明的 Prerequisites =====
+                // 复测时 _retestStartIndex 之前的任务会被跳过，但"设置速度""启动电机"这类任务
+                // 留下的设备状态必须重新建立，否则转速类判定永远起不来。
+                HashSet<int> retestPrereqIndices = new HashSet<int>();
+                if (_retestStartIndex > 0 && _retestStartIndex < VisibleJobs.Count)
+                {
+                    CollectPrerequisiteIndices(VisibleJobs[_retestStartIndex], retestPrereqIndices, 0);
+                    if (retestPrereqIndices.Count > 0)
+                    {
+                        Log.Information($"复测前置任务补跑:{string.Join(",", retestPrereqIndices.OrderBy(i => i).Select(i => $"[{i}]{VisibleJobs[i].JobName}"))}");
+                    }
+                }
+
                 for (int jobIndex = 0; jobIndex < VisibleJobs.Count; jobIndex++)
                 {
                     var job = VisibleJobs[jobIndex];
 
                     // =========复测核心：下标小于起始下标，直接跳过不执行=========
-                    if (jobIndex < _retestStartIndex)
+                    // 例外：目标任务声明的复测前置任务要补跑（按原顺序补跑，先设置速度/启动电机，再判定）
+                    if (jobIndex < _retestStartIndex && !retestPrereqIndices.Contains(jobIndex))
                     {
                         Log.Information($"复测跳过已完成Job:{job.JobName}");
                         continue;

@@ -57,6 +57,24 @@ namespace TestingSoftware.Models
         [Description("任务执行信号")]
         public List<DiagService> Services { get; set; } = new List<DiagService>();
 
+        /// <summary>
+        /// 复测前置任务：复测从本任务（或其后的任务）开始时，会先补跑这些任务，
+        /// 用来恢复被复测起点跳过、但设备又必需的状态（如设置速度、启动电机）。
+        /// 按任务名称（JobName）或任务序号（SerialNumber）匹配，按书写顺序补跑。
+        /// </summary>
+        [Description("复测前置任务（名称或序号），复测时先补跑")]
+        [XmlArray(ElementName = "Prerequisites")]
+        [XmlArrayItem(ElementName = "Prerequisite")]
+        public List<string> Prerequisites { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 没有前置任务时不写该节点，避免老工程保存后多出空元素。
+        /// </summary>
+        public bool ShouldSerializePrerequisites()
+        {
+            return Prerequisites != null && Prerequisites.Count > 0;
+        }
+
         [XmlIgnore]
         public List<SignalViewModel> SignalViewModels { get; set; } = new List<SignalViewModel>();
     }
