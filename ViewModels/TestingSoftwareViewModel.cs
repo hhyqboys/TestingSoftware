@@ -919,6 +919,25 @@ namespace TestingSoftware.ViewModels
             }
         }
 
+        /// <summary>
+        /// 把 IoService 的 Values 按"两字节一个大端寄存器"顺序批量写入 AO 保持寄存器。
+        /// 阶梯递增模式下用它把当前阶梯值下发到 IO 模块。
+        /// </summary>
+        private void WriteAoValues(IoService service)
+        {
+            if (service.Values == null || service.Values.Length == 0)
+                throw new Exception("AO数据长度不能为0");
+            if (service.Values.Length % 2 != 0)
+                throw new Exception("AO数据长度必须为偶数");
+
+            ushort[] values = new ushort[service.Values.Length / 2];
+            for (int i = 0; i < values.Length; i++)
+            {
+                values[i] = (ushort)((service.Values[i * 2] << 8) | service.Values[i * 2 + 1]);
+            }
+            _modBusService.WriteAoMultiRegisters(service.StartAddress, values, service.SlaveId);
+        }
+
         /// <summary>状态常量：0空闲 1测试中 2通过 -1失败 -2重试中 -3手动停止</summary>
         public void JobStatusChanged(Job job, int status, string? info = null, bool canRetry = false)
         {
@@ -1183,6 +1202,40 @@ namespace TestingSoftware.ViewModels
                     {
                         int CycleNumber = 0;
                         bool failedThisRound = false;   // 本轮是否有 service 失败（用于跳过剩余 service）
+
+                        // ===== 阶梯递增输出：只有 IoService(AO) 显式配置了 <Step> 才启用 =====
+                        // 老 XML 没有 <Step> 节点 → stepService 为 null → 走原来的重试循环，行为完全不变
+                        IoService? stepService = null;
+                        ushort stepValue = 0;
+                        ushort stepMax = 0;
+                        ushort stepDelta = 0;
+                        int stepDelayMs = 0;
+                        bool stepDone = false;
+                        if (job.Services != null)
+                        {
+                            foreach (var s in job.Services)
+                            {
+                                if (s is IoService io && io.IoType == IoType.Ao && io.Step != null)
+                                {
+                                    stepService = io;
+                                    break;
+                                }
+                            }
+                        }
+                        if (stepService != null)
+                        {
+                            stepValue = stepService.Step!.StartValue;
+                            stepDelta = stepService.Step.StepValue;
+                            stepMax = stepService.EffectiveMaxValue;
+                            stepDelayMs = stepService.Step.DelayAfterStepMs > 0 ? stepService.Step.DelayAfterStepMs : job.CycleDelayTimeMs;
+                            if (stepDelta == 0)
+                                throw new Exception($"任务{job.JobName}:阶梯步进StepValue不能为0");
+
+                            // 先输出起始值，再开始判定
+                            stepService.ApplyStepValue(stepValue);
+                            WriteAoValues(stepService);
+                            Log.Information($"阶梯输出启用:{job.JobName},起始=0x{stepValue:X4},步进=0x{stepDelta:X4},上限=0x{stepMax:X4},每级等待{stepDelayMs}ms");
+                        }
 
                         do
                         {
@@ -1699,13 +1752,54 @@ namespace TestingSoftware.ViewModels
                                 }
                             }
 
+                            // ===== 阶梯递增：本轮全部判定通过 → 抬升一级并重新开始判定 =====
+                            if (stepService != null && !failedThisRound && job.Status == JOB_RUNNING)
+                            {
+                                if (stepValue >= stepMax)
+                                {
+                                    // 已抬到上限且本轮再次判定通过 → 本任务结束
+                                    stepDone = true;
+                                    Log.Information($"阶梯输出已达上限且判定通过:{job.JobName},当前=0x{stepValue:X4}");
+                                }
+                                else
+                                {
+                                    stepValue = (ushort)Math.Min((int)stepValue + stepDelta, (int)stepMax);
+                                    stepService.ApplyStepValue(stepValue);
+                                    try
+                                    {
+                                        WriteAoValues(stepService);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        string msg = (stepService.Signals.Count > 0 && !string.IsNullOrEmpty(stepService.Signals[0].ErrorMsg))
+                                            ? stepService.Signals[0].ErrorMsg!
+                                            : "AO输出失败";
+                                        bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
+                                        JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, msg);
+                                        failedThisRound = true;
+                                        Log.Information($"执行任务失败:{job.JobName}-{msg},{ex.Message}");
+                                    }
+
+                                    if (!failedThisRound)
+                                    {
+                                        // 重新启动判定：重试计数归零，等待稳定后从第一个 service 重新判断
+                                        CycleNumber = 0;
+                                        Log.Information($"阶梯输出抬升:{job.JobName},当前=0x{stepValue:X4},等待{stepDelayMs}ms后重新判定");
+                                        await Task.Delay(stepDelayMs, ct);
+                                        continue;
+                                    }
+                                }
+                            }
+
                             // 失败且还可重试 → 延时后进入下一轮
                             if (job.Status == JOB_RETRYING)
                             {
                                 await Task.Delay(job.CycleDelayTimeMs, ct);
                                 CycleNumber++;
                             }
-                        } while (job.Status == JOB_RETRYING && CycleNumber <= job.CycleNumber && !ct.IsCancellationRequested);
+                        } while (((job.Status == JOB_RETRYING && CycleNumber <= job.CycleNumber)
+                                  || (stepService != null && job.Status == JOB_RUNNING && !stepDone))
+                                 && !ct.IsCancellationRequested);
 
                         // 循环结束：只有 RUNNING 才算成功（重试成功已恢复为 RUNNING）
                         if (job.Status == JOB_RUNNING)
