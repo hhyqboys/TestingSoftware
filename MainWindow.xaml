@@ -162,7 +162,7 @@
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Margin="5" VerticalAlignment="Center" FontSize="20" Text="蓝牙MAC:" />
                     <TextBox Width="180" Height="40" Margin="5" VerticalAlignment="Center" FontSize="20"
-                             MaxLength="12" InputMethod.IsInputMethodEnabled="False"
+                             MaxLength="17" InputMethod.IsInputMethodEnabled="False"
                              GotFocus="MacAddressTextBox_GotFocus"
                              KeyDown="MacAddressTextBox_KeyDown"
                              Text="{Binding MacAddressInput}" />
@@ -202,7 +202,7 @@
         <Border Grid.Row="4" Margin="0,1" HorizontalAlignment="Stretch" Background="#cccccc" />
         <DockPanel Grid.Row="5" Margin="5">
             <TextBlock VerticalAlignment="Center" FontSize="25" Text="SN：" />
-            <TextBox Width="310" Height="40" Margin="8,0" VerticalAlignment="Center" FontSize="25"
+            <TextBox x:Name="ScanSnTextBox" Width="310" Height="40" Margin="8,0" VerticalAlignment="Center" FontSize="25"
                      GotFocus="ScanSnTextBox_GotFocus" InputMethod.IsInputMethodEnabled="False"
                      KeyDown="ScanSnTextBox_KeyDown" Text="{Binding ScanSn}" />
             <TextBlock VerticalAlignment="Center" FontSize="25" Text="复查数据：" />
