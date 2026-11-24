@@ -99,18 +99,41 @@ namespace TestingSoftware.Adapters
         }
         public override async Task<int> StartAsync()
         {
-            int result = 0;
             handshake = false;
             _isUserInitiatedDisconnect = false;
 
-            // TODO: Implement Bluetooth start
-            result = await IsBluetoothAdapterNormalAsync() ? 0 : -1;
+            // 蓝牙适配器不可用（被关闭/无硬件）直接失败
+            if (!await IsBluetoothAdapterNormalAsync())
+            {
+                return -1;
+            }
 
-            if (_device != null)
-                _device.Dispose();
+            int result = -1;
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                result = await StartOnceAsync();
+                if (result == 0) break;
 
-            if (_gattService != null)
-                _gattService.Dispose();
+                // 连接失败时彻底释放 GATT 客户端会话：
+                // 否则 Windows 侧会残留“已连接”，之后所有重连都会被这个僵尸会话挡住。
+                Log.Warning("蓝牙连接第 {Attempt}/2 次失败，清理 GATT 资源后重试", attempt);
+                await ReleaseGattResourcesAsync();
+                await Task.Delay(1_000);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 单次连接尝试。
+        /// </summary>
+        private async Task<int> StartOnceAsync()
+        {
+            int result = 0;
+
+            // 开连之前先释放上一轮可能残留的 GATT 对象（characteristic → service → device）
+            await ReleaseGattResourcesAsync();
+
             try
             {
                 _device = await BluetoothLEDevice.FromBluetoothAddressAsync(SelectedSlaveDevInfo.BluetoothAddress);
@@ -120,14 +143,14 @@ namespace TestingSoftware.Adapters
                 _device.ConnectionStatusChanged += OnConnectionStatusChanged;
 
 
-                var servicesResult = await _device.GetGattServicesForUuidAsync(serviceUuid);
+                var servicesResult = await _device.GetGattServicesForUuidAsync(serviceUuid, BluetoothCacheMode.Uncached);
                 if (servicesResult.Status == GattCommunicationStatus.Success && servicesResult.Services.Count > 0)
                 {
                     //Log.Debug("发现服务");
                     var service = servicesResult.Services[0];
                     _gattService = service;
                     // 发现特征
-                    var characteristicsResult = await service.GetCharacteristicsAsync();
+                    var characteristicsResult = await service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
                     if (characteristicsResult.Status != GattCommunicationStatus.Success)
                     {
                         return -1;
@@ -161,7 +184,7 @@ namespace TestingSoftware.Adapters
                 else
                 {
                     /* New BLE */
-                    servicesResult = await _device.GetGattServicesForUuidAsync(newServiceUuid);
+                    servicesResult = await _device.GetGattServicesForUuidAsync(newServiceUuid, BluetoothCacheMode.Uncached);
                     if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
                     {
                         return -1;
@@ -171,7 +194,7 @@ namespace TestingSoftware.Adapters
                     var service = servicesResult.Services[0];
                     _gattService = service;
                     // 发现特征
-                    var characteristicsResult = await service.GetCharacteristicsAsync();
+                    var characteristicsResult = await service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
                     if (characteristicsResult.Status != GattCommunicationStatus.Success)
                     {
                         return -1;
@@ -388,39 +411,109 @@ namespace TestingSoftware.Adapters
 
             _isUserInitiatedDisconnect = true;
             int result = 0;
-            // TODO: Implement Bluetooth stop
-            if (Running)
+
+            try
             {
+                // Datalink 内部负责写 CCCD=None 并退订 ValueChanged，必须执行，否则外设侧通知一直挂着
                 result = await Datalinks[0].StopAsync();
             }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "停止蓝牙 Datalink 失败，继续释放 GATT 资源");
+                result = -1;
+            }
+
             if (_device != null)
             {
                 _device.ConnectionStatusChanged -= OnConnectionStatusChanged;
                 try
                 {
-                    using (var session = await GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId))
+                    using var session = await GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId);
+                    if (session != null)
                     {
-                        if (session != null)
-                        {
-                            session.MaintainConnection = false;   
-                        }
+                        session.MaintainConnection = false;
                     }
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-
+                    Log.Debug(ex, "关闭 GattSession 保持连接失败");
                 }
             }
 
-            _gattService?.Dispose();
-            _gattService = null;
-            _device?.Dispose();
-            _device = null;
+            // 关键：把 characteristic / service / device 全部释放，否则 Windows 会认为设备仍“已连接”
+            await ReleaseGattResourcesAsync();
 
             await Task.Delay(1_000); // 等待蓝牙彻底断开
 
-
             return result;
+        }
+
+        /// <summary>
+        /// 按 characteristic → service → device 的顺序彻底释放 GATT 客户端资源。
+        /// 任何一步失败都不影响后续释放，最后清空引用（含 Datalink 层持有的静态特征引用），
+        /// 避免 Windows 蓝牙列表里残留“已连接”状态导致后续连接始终失败。
+        /// </summary>
+        private async Task ReleaseGattResourcesAsync()
+        {
+            if (_notifyCharacteristic != null)
+            {
+                try
+                {
+                    await _notifyCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
+                        GattClientCharacteristicConfigurationDescriptorValue.None);
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "释放前关闭通知失败");
+                }
+
+                // WinRT 的 GattCharacteristic 没有 Dispose：退订回调后置空引用，由 GC 释放即可
+                _notifyCharacteristic.ValueChanged -= OnDataReceived;
+                _notifyCharacteristic = null;
+            }
+
+            if (_writeCharacteristic != null)
+            {
+                // 同上：WinRT 特征对象没有 Dispose，置空引用
+                _writeCharacteristic = null;
+            }
+
+            if (_gattService != null)
+            {
+                try
+                {
+                    _gattService.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "释放 GATT 服务失败");
+                }
+
+                _gattService = null;
+            }
+
+            if (_device != null)
+            {
+                try
+                {
+                    _device.ConnectionStatusChanged -= OnConnectionStatusChanged;
+                    _device.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug(ex, "释放 BluetoothLEDevice 失败");
+                }
+
+                _device = null;
+            }
+
+            // Datalink 里保存的是静态特征引用，同样要清掉，防止下次连接前仍指向已释放对象
+            BluetoothDataLink._notifyCharacteristic = null;
+            BluetoothDataLink._writeCharacteristic = null;
+
+            handshake = false;
+
+            Log.Information("蓝牙 GATT 资源已释放");
         }
         public async Task<bool> IsBluetoothAdapterNormalAsync()
         {
