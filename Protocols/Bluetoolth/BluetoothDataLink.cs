@@ -99,7 +99,11 @@ namespace TestingSoftware.Protocols.Bluetoolth
             int ret = 0;
             if (_notifyCharacteristic == null || _writeCharacteristic == null) return -1;
 
+            // 重连后 GATT 特征对象是新的：先解绑再订阅，保证新特征一定有人监听（否则报文只进 adapter 不进 UDS）
+            _notifyCharacteristic.ValueChanged -= OnDataReceived;
             _notifyCharacteristic.ValueChanged += OnDataReceived;
+            // 清掉上一轮残留的半帧数据，避免新连接首帧解析错位
+            _rxBuffer = new PduReceiveBuffer();
             // Save the start time.
             _startTime = HighResolutionTimer.Milliseconds;
             // Create the transmitting task.

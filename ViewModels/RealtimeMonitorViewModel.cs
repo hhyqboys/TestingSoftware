@@ -91,6 +91,12 @@ namespace TestingSoftware.ViewModels
         /// <summary>电机温度仪表固定量程上限（℃）。</summary>
         private const double TemperatureMaximum = 200d;
 
+        /// <summary>本次连接内是否已做过会话准备（10 03）。</summary>
+        private bool _sessionPrepared;
+
+        /// <summary>安全访问连续失败次数；达 2 次后本连接内不再重复尝试（固件可能不支持读 22 F1 86）。</summary>
+        private int _securityFailures;
+
         /// <summary>
         /// 属性变更事件。
         /// </summary>
@@ -337,13 +343,30 @@ namespace TestingSoftware.ViewModels
 
             try
             {
-                // 2C / 2A 需要在扩展会话 + 安全访问通过后才能执行；已解锁时内部会直接返回。
-                bool unlocked = await _securityService.UnlockMCUNoPopAsync();
-                if (!unlocked)
+                // 首次开启前先做一次会话准备：下位机可能不支持读取当前会话（22 F1 86 无应答），
+                // 因此“进扩展会话 / 安全访问”都按尽力而为处理，失败只记录，不阻断 2C/2A。
+                if (!_sessionPrepared)
                 {
-                    MonitorStatus = "MCU 安全解锁失败，无法开启主动上传";
-                    Log.Warning("实时监控：安全解锁失败，放弃开启动态 DID 主动上传");
-                    return -2;
+                    await Task.Delay(200);
+                    await TryExtendedSessionAsync();
+                    _sessionPrepared = true;
+                }
+
+                // 安全访问失败通常是固件不带 22 F1 86 读取，连续失败后不再重复尝试，避免每次卡 1.5s
+                if (_securityFailures < 2)
+                {
+                    bool unlocked = await _securityService.UnlockMCUNoPopAsync();
+                    if (!unlocked)
+                    {
+                        _securityFailures++;
+                        Log.Warning($"实时监控：安全访问未通过（连续 {_securityFailures} 次），继续尝试下发 2C/2A");
+                        // 会话可能已切到默认，重新进扩展会话（失败也继续）
+                        await TryExtendedSessionAsync();
+                    }
+                    else
+                    {
+                        _securityFailures = 0;
+                    }
                 }
 
                 // 先复位下位机可能残留的周期上报与动态定义，避免长度/顺序错位。
@@ -498,6 +521,31 @@ namespace TestingSoftware.ViewModels
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 进扩展会话（10 03），尽力而为：失败仅记录，不阻断后续 2C/2A 下发。
+        /// </summary>
+        private async Task TryExtendedSessionAsync()
+        {
+            if (!_uds.Running) return;
+
+            try
+            {
+                Service10 service10 = new Service10
+                {
+                    Subfunc = Service10.EXTENDED_DIAG_SESSION
+                };
+                Pdu? response = await _uds.Request(service10.BuildRequest());
+                if (response == null || service10.ParseResponse(response) != 0)
+                {
+                    Log.Warning("实时监控：进入扩展会话未成功，继续尝试下发 2C/2A");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "实时监控：进入扩展会话异常");
+            }
         }
 
         /// <summary>

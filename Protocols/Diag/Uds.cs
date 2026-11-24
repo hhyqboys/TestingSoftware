@@ -1278,7 +1278,12 @@ namespace TestingSoftware.Protocols.Diag
                     while (!Cts.Token.IsCancellationRequested)
                     {
                         Pdu? pdu = null;
-                        if (isPause) continue;
+                        if (isPause)
+                        {
+                            // 避免暂停时 continue 变成死循环空转打满 CPU
+                            await Task.Delay(20, Cts.Token);
+                            continue;
+                        }
                         try
                         {
                             if (LowLevelProtocol != null)

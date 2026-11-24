@@ -605,6 +605,17 @@ namespace TestingSoftware.ViewModels
             {
                 Log.Warning(ex, "断开连接前停止实时监控失败");
             }
+
+            // 必须先把 UDS 停掉：否则上一轮的接收任务与旧 GATT 订阅会残留，重连后新特征没人监听
+            try
+            {
+                await _udsService.StopAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "断开连接前停止 UDS 服务失败");
+            }
+
             result = await (BluetoothViewAdapter.Model?.StopAsync() ?? Task.FromResult(-1));
             return result;
         }
@@ -646,11 +657,52 @@ namespace TestingSoftware.ViewModels
                 BluetoothInfo.macAddress = macHex;
             }
 
-            //_udsService.BuildStackFromDatalink(Project.BluetoothAdapter.Datalinks[0], SelectModeIndex);
-            _udsService.BuildStackFromDatalink(BluetoothAdapter.Datalinks[0], 0);
+            // 重连前彻底停掉上一轮 UDS（取消接收任务、退订旧 GATT），否则接手新链路的接收任务不会重建
+            if (_udsService.Running)
+            {
+                try
+                {
+                    await _udsService.StopAsync();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "重连前停止 UDS 服务失败");
+                }
+            }
+
+            // 必须挂在真实建立连接的那个 Adapter 的 Datalink 上：
+            // BluetoothViewAdapter.Model 才是实际握手/订阅特征的实例，用错实例会导致收不到任何报文。
+            Datalink? datalink = null;
+            if (BluetoothViewAdapter.Model != null && BluetoothViewAdapter.Model.Datalinks.Count > 0)
+            {
+                datalink = BluetoothViewAdapter.Model.Datalinks[0];
+            }
+            else if (BluetoothAdapter.Datalinks.Count > 0)
+            {
+                datalink = BluetoothAdapter.Datalinks[0];
+            }
+
+            if (datalink == null)
+            {
+                Status = -1;
+                TestStatusInfo = "未找到可用的蓝牙数据链路";
+                return -1;
+            }
+
+            _udsService.BuildStackFromDatalink(datalink, 0);
+
             if (BluetoothViewAdapter.Model != null)
             {
                 result = await BluetoothViewAdapter.Model.StartAsync();
+                if (result == 0)
+                {
+                    // 连接与握手完成后再启动 UDS：此时 GATT 特征已就绪，才能订阅到新链路的通知
+                    int udsResult = await _udsService.StartAsync();
+                    if (udsResult != 0)
+                    {
+                        Log.Warning("蓝牙已连接，但 UDS 服务启动失败，返回 {Result}", udsResult);
+                    }
+                }
             }
             else
             {
