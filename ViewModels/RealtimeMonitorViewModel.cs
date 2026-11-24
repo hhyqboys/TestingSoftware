@@ -256,6 +256,19 @@ namespace TestingSoftware.ViewModels
         {
             if (IsMonitoring) return 0;
 
+            // 蓝牙已连上时 UDS 接收任务可能还没起，这里补一次启动，保证能收到 2A 周期帧。
+            if (!_uds.Running)
+            {
+                try
+                {
+                    await _uds.StartAsync();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "实时监控：启动 UDS 服务失败");
+                }
+            }
+
             if (!_uds.Running)
             {
                 MonitorStatus = "未连接设备，无法开启实时监控";
@@ -342,6 +355,42 @@ namespace TestingSoftware.ViewModels
                 Log.Error(ex, "实时监控：开启失败");
                 return -5;
             }
+        }
+
+        /// <summary>
+        /// 开启监控，失败后重试：默认 3 次重试、每次间隔 500ms（共 4 次尝试）。
+        /// </summary>
+        /// <param name="retryCount">重试次数（不含首次尝试）。</param>
+        /// <param name="intervalMs">每次重试前的等待时间（毫秒）。</param>
+        /// <returns>0 表示最终成功，其它为最后一次失败码。</returns>
+        public async Task<int> StartWithRetryAsync(int retryCount = 3, int intervalMs = 500)
+        {
+            int result = await StartAsync();
+            if (result == 0) return 0;
+
+            for (int attempt = 1; attempt <= retryCount; attempt++)
+            {
+                if (IsMonitoring) return 0;
+
+                Log.Warning($"实时监控：开启失败（返回 {result}），{intervalMs}ms 后进行第 {attempt}/{retryCount} 次重试");
+                MonitorStatus = $"主动上传开启失败（返回 {result}），第 {attempt}/{retryCount} 次重试中…";
+
+                await Task.Delay(intervalMs);
+
+                // 连接已断开就没必要继续重试
+                if (!_uds.Running) break;
+
+                result = await StartAsync();
+                if (result == 0)
+                {
+                    Log.Information($"实时监控：第 {attempt} 次重试成功");
+                    return 0;
+                }
+            }
+
+            MonitorStatus = $"主动上传开启失败（返回 {result}），已重试 {retryCount} 次";
+            Log.Warning($"实时监控：重试结束仍未成功，最后返回 {result}");
+            return result;
         }
 
         /// <summary>

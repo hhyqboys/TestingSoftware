@@ -546,7 +546,14 @@ namespace TestingSoftware.ViewModels
             else
             {
                 result = await ConnectAsync();
-                if (result == 0) SetConnectionState(true);
+                if (result == 0)
+                {
+                    SetConnectionState(true);
+
+                    // 连接成功后自动开启实时监控（动态 DID + 2A 主动上传）；
+                    // 开启失败自动重试 3 次，每次间隔 500ms。
+                    await Monitor.StartWithRetryAsync();
+                }
             }
 
             if (result != 0)
@@ -814,6 +821,9 @@ namespace TestingSoftware.ViewModels
                 if (result == 0)
                 {
                     SetConnectionState(true);
+
+                    // 自动连接成功后同样自动开启实时监控（失败重试 3 次，间隔 500ms）
+                    await Monitor.StartWithRetryAsync();
                 }
                 else
                 {
@@ -1152,6 +1162,9 @@ namespace TestingSoftware.ViewModels
                 if (result == 0)
                 {
                     SetConnectionState(true);
+
+                    // 自动连接成功后同样自动开启实时监控（失败重试 3 次，间隔 500ms）
+                    await Monitor.StartWithRetryAsync();
                 }
                 else
                 {
@@ -1250,7 +1263,9 @@ namespace TestingSoftware.ViewModels
                 // 母线电流 / 转速 / 电机温度 / 故障码。失败不影响测试流程（仅记录日志与状态）。
                 if (_udsService.Running)
                 {
-                    int monitorResult = await Monitor.StartAsync();
+                    // 正常情况下连接成功后已自动开启（此处会直接返回 0）；
+                    // 若期间被关闭或首次未成功，这里再按 3 次重试兜底。
+                    int monitorResult = await Monitor.StartWithRetryAsync();
                     if (monitorResult == 0)
                     {
                         Log.Information("实时监控已开启（动态 DID 主动上传）");
