@@ -343,30 +343,14 @@ namespace TestingSoftware.ViewModels
 
             try
             {
-                // 首次开启前先做一次会话准备：下位机可能不支持读取当前会话（22 F1 86 无应答），
-                // 因此“进扩展会话 / 安全访问”都按尽力而为处理，失败只记录，不阻断 2C/2A。
-                if (!_sessionPrepared)
-                {
-                    await Task.Delay(200);
-                    await TryExtendedSessionAsync();
-                    _sessionPrepared = true;
-                }
-
                 // 安全访问失败通常是固件不带 22 F1 86 读取，连续失败后不再重复尝试，避免每次卡 1.5s
                 if (_securityFailures < 2)
                 {
-                    bool unlocked = await _securityService.UnlockMCUNoPopAsync();
-                    if (!unlocked)
-                    {
-                        _securityFailures++;
-                        Log.Warning($"实时监控：安全访问未通过（连续 {_securityFailures} 次），继续尝试下发 2C/2A");
-                        // 会话可能已切到默认，重新进扩展会话（失败也继续）
-                        await TryExtendedSessionAsync();
-                    }
-                    else
-                    {
-                        _securityFailures = 0;
-                    }
+                    Service10 service10 = new Service10();
+                    service10.Subfunc = Service10.EXTENDED_DIAG_SESSION;
+                    var request = service10.BuildRequest();
+                    await _uds.Request(request);
+                    _securityFailures = 0;
                 }
 
                 // 先复位下位机可能残留的周期上报与动态定义，避免长度/顺序错位。
