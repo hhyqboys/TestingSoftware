@@ -2058,35 +2058,58 @@ namespace TestingSoftware.ViewModels
             }
             return res;
         }
-        /// <summary>解析位掩码故障码, 返回中文拼接字符串 (示例: 190980)</summary>
+        /// <summary>位掩码故障码 -> 中文故障名（同一个故障字可能同时置多个位）。</summary>
+        private static readonly Dictionary<uint, string> FaultMap = new Dictionary<uint, string>
+        {
+            [2] = "过压",
+            [4] = "欠压",
+            [8] = "过流",
+            [16] = "缺相",
+            [32] = "驱动保护",
+            [64] = "MCU过温",
+            [128] = "电机过温",
+            [256] = "编码器故障",
+            [512] = "MCU温度传感器",
+            [1024] = "电机温度传感器",
+            [2048] = "MOSFET上管短路",
+            [4096] = "MOSFET下管短路",
+            [8192] = "堵转",
+            [16384] = "MOSFET上管"
+        };
+
+        /// <summary>解析位掩码故障码, 返回中文拼接字符串 (示例: 过压, 过流)</summary>
         public static string GetFaultText(uint value)
         {
-            // 位掩码 -> 中文故障名
-            var map = new Dictionary<uint, string>
-            {
-                
-                [2] = "过压",
-                [4] = "欠压",
-                [8] = "过流",
-                [16] = "缺相",
-                [32] = "驱动保护",
-                [64] = "MCU过温",
-                [128] = "电机过温",
-                [256] = "编码器故障",
-                [512] = "MCU温度传感器",
-                [1024] = "电机温度传感器",
-                [2048] = "MOSFET上管短路",
-                [4096] = "MOSFET下管短路",
-                [8192] = "堵转",
-                [16384] = "MOSFET上管"
-            };
-
             if (value == 0) return "无故障";
+            return string.Join(", ", GetFaultNames(value));
+        }
 
-            // 逐个位检测并拼接
-            var hits = map.Where(k => k.Key != 0 && (value & k.Key) == k.Key)
-                          .Select(k => k.Value);
-            return string.Join(", ", hits);
+        /// <summary>
+        /// 解析位掩码故障码，返回逐项故障名（按位从低到高）。
+        /// 一个故障字里可能同时置多个位，因此返回列表而不是单条文本。
+        /// </summary>
+        public static List<string> GetFaultNames(uint value)
+        {
+            List<string> names = new List<string>();
+            if (value == 0) return names;
+
+            uint rest = value;
+            for (int bit = 0; bit < 32; bit++)
+            {
+                uint mask = 1u << bit;
+                if ((value & mask) != mask) continue;
+
+                rest &= ~mask;
+                names.Add(FaultMap.TryGetValue(mask, out string? name) ? name : $"未定义故障位 Bit{bit}");
+            }
+
+            // rest 理论上只剩高位，兜底提示，便于现场排查固件新增的故障位
+            if (rest != 0)
+            {
+                names.Add($"未定义故障位 0x{rest:X8}");
+            }
+
+            return names;
         }
         /// <summary>
         /// 32bit 数据映射 32 个引脚, 期待值与事实值不匹配的位视为引脚故障

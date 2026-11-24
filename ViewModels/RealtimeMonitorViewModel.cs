@@ -9,6 +9,7 @@
 using Serilog;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -75,6 +76,21 @@ namespace TestingSoftware.ViewModels
         private double _motorTemperature;
         private uint _faultCode;
 
+        /// <summary>母线电流历史峰值（只增不减，用于锁定仪表量程）。</summary>
+        private double _busCurrentPeak;
+
+        /// <summary>转速历史峰值（只增不减，用于锁定仪表量程）。</summary>
+        private double _motorSpeedPeak;
+
+        /// <summary>母线电流量程余量（A）：量程 = 峰值 + 30。</summary>
+        private const double BusCurrentMargin = 30d;
+
+        /// <summary>转速量程余量（RPM）：量程 = 峰值 + 200。</summary>
+        private const double MotorSpeedMargin = 200d;
+
+        /// <summary>电机温度仪表固定量程上限（℃）。</summary>
+        private const double TemperatureMaximum = 200d;
+
         /// <summary>
         /// 属性变更事件。
         /// </summary>
@@ -109,6 +125,11 @@ namespace TestingSoftware.ViewModels
         /// 开始/停止监控命令。
         /// </summary>
         public ICommand ToggleMonitorCommand { get; }
+
+        /// <summary>
+        /// 当前检出的故障明细（每项一条，故障可能同时存在多个）。
+        /// </summary>
+        public ObservableCollection<string> FaultItems { get; } = new ObservableCollection<string>();
 
         public RealtimeMonitorViewModel(UdsService uds, McuSecurityService securityService)
         {
@@ -206,6 +227,45 @@ namespace TestingSoftware.ViewModels
         /// 累计接收帧数显示。
         /// </summary>
         public string FrameCountText => $"累计 {_frameCount} 帧";
+
+        #region 仪表绑定值
+
+        /// <summary>
+        /// 母线电流仪表当前值（A）。
+        /// </summary>
+        public double BusCurrentValue => _busCurrent;
+
+        /// <summary>
+        /// 母线电流仪表量程上限（A）：历史峰值 + 30，只增不减。
+        /// </summary>
+        public double BusCurrentMaximum => Math.Max(BusCurrentMargin, Math.Ceiling(_busCurrentPeak + BusCurrentMargin));
+
+        /// <summary>
+        /// 转速仪表当前值（RPM）。
+        /// </summary>
+        public double MotorSpeedValue => _motorSpeed;
+
+        /// <summary>
+        /// 转速仪表量程上限（RPM）：历史峰值 + 200，只增不减。
+        /// </summary>
+        public double MotorSpeedMaximum => Math.Max(MotorSpeedMargin, Math.Ceiling(_motorSpeedPeak + MotorSpeedMargin));
+
+        /// <summary>
+        /// 电机温度仪表当前值（℃）。
+        /// </summary>
+        public double MotorTemperatureValue => _motorTemperature;
+
+        /// <summary>
+        /// 电机温度仪表量程上限（固定 0~200℃）。
+        /// </summary>
+        public double MotorTemperatureMaximum => TemperatureMaximum;
+
+        /// <summary>
+        /// 故障条数/概要文字。
+        /// </summary>
+        public string FaultSummaryText => HasFault ? $"检出 {FaultItems.Count} 项故障" : "无故障";
+
+        #endregion
 
         #endregion
 
@@ -571,16 +631,55 @@ namespace TestingSoftware.ViewModels
             _busCurrent = ToDouble(BusCurrentSignal);
             _motorSpeed = ToDouble(MotorSpeedSignal);
             _motorTemperature = ToDouble(MotorTemperatureSignal);
-            _faultCode = (uint)Math.Max(0, (long)ToDouble(FaultCodeSignal));
+
+            // 量程只增不减：峰值一旦抬高，仪表上限就固定住，不会跟随回落
+            bool busRangeChanged = false;
+            if (_busCurrent > _busCurrentPeak)
+            {
+                _busCurrentPeak = _busCurrent;
+                busRangeChanged = true;
+            }
+
+            bool speedRangeChanged = false;
+            if (_motorSpeed > _motorSpeedPeak)
+            {
+                _motorSpeedPeak = _motorSpeed;
+                speedRangeChanged = true;
+            }
+
+            uint fault = (uint)Math.Max(0, (long)ToDouble(FaultCodeSignal));
+            bool faultChanged = fault != _faultCode;
+            _faultCode = fault;
 
             OnPropertyChanged(nameof(BusCurrentText));
             OnPropertyChanged(nameof(MotorSpeedText));
             OnPropertyChanged(nameof(MotorTemperatureText));
+            OnPropertyChanged(nameof(BusCurrentValue));
+            OnPropertyChanged(nameof(MotorSpeedValue));
+            OnPropertyChanged(nameof(MotorTemperatureValue));
             OnPropertyChanged(nameof(FaultCodeText));
             OnPropertyChanged(nameof(FaultText));
             OnPropertyChanged(nameof(HasFault));
             OnPropertyChanged(nameof(FrameRateText));
             OnPropertyChanged(nameof(FrameCountText));
+
+            if (busRangeChanged) OnPropertyChanged(nameof(BusCurrentMaximum));
+            if (speedRangeChanged) OnPropertyChanged(nameof(MotorSpeedMaximum));
+            if (faultChanged) RefreshFaultItems();
+        }
+
+        /// <summary>
+        /// 按当前位掩码刷新故障明细列表（故障可能同时存在多项）。
+        /// </summary>
+        private void RefreshFaultItems()
+        {
+            FaultItems.Clear();
+            foreach (string name in TestingSoftwareViewModel.GetFaultNames(_faultCode))
+            {
+                FaultItems.Add(name);
+            }
+
+            OnPropertyChanged(nameof(FaultSummaryText));
         }
 
         /// <summary>
