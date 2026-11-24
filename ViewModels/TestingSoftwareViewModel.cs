@@ -76,6 +76,13 @@ namespace TestingSoftware.ViewModels
         private int MaximumSignalLength = 60;
 
         public BluetoothViewModel BluetoothViewAdapter { get; set; }
+
+        /// <summary>
+        /// 实时监控面板（母线电流 / 转速 / 电机温度 / 故障码），
+        /// 采用“2C 定义动态 DID + 2A 开启主动上传”的方式接收下位机周期上报。
+        /// </summary>
+        public RealtimeMonitorViewModel Monitor { get; }
+
         /// <summary>
         /// The list of jobs that are currently visible in the UI.
         /// </summary>
@@ -347,6 +354,8 @@ namespace TestingSoftware.ViewModels
 
 
             _mcuSecurityService = new McuSecurityService(_udsService);
+            // 实时监控面板（动态 DID + 2A 主动上传），与 UDS 服务共用同一链路
+            Monitor = new RealtimeMonitorViewModel(_udsService, _mcuSecurityService);
             //_lineConfigPageView = lineConfigPageView;
             _selectedSerialPort = Properties.Settings.Default.LastSerialPort;
             ScanSerialAction.Execute(null);
@@ -439,6 +448,9 @@ namespace TestingSoftware.ViewModels
 
             FileName = filePath;
             Model = loadedModel;
+
+            // 实时监控通道沿用工程里的采样标定参数（RShunt / Aop / AdcRefVolt …）
+            Monitor.Configure(loadedModel);
 
             //重建内部引用
             if (loadedModel.Jobs != null)
@@ -566,6 +578,15 @@ namespace TestingSoftware.ViewModels
         public async Task<int> DisconnectAsync()
         {
             int result = -1;
+            // 断开前先关闭实时监控（2A STOP + 2C 清除定义），避免下位机持续上报占用链路
+            try
+            {
+                await Monitor.StopAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "断开连接前停止实时监控失败");
+            }
             result = await (BluetoothViewAdapter.Model?.StopAsync() ?? Task.FromResult(-1));
             return result;
         }
@@ -1223,6 +1244,22 @@ namespace TestingSoftware.ViewModels
                     }
                 }, token3E80);
                 await Task.Delay(1000, ct);
+
+                // ===== 开启实时监控 =====
+                // 2C 定义动态 DID + 2A 快速率开启下位机主动上传，之后由接收线程持续刷新
+                // 母线电流 / 转速 / 电机温度 / 故障码。失败不影响测试流程（仅记录日志与状态）。
+                if (_udsService.Running)
+                {
+                    int monitorResult = await Monitor.StartAsync();
+                    if (monitorResult == 0)
+                    {
+                        Log.Information("实时监控已开启（动态 DID 主动上传）");
+                    }
+                    else
+                    {
+                        Log.Warning($"实时监控开启失败，返回:{monitorResult}");
+                    }
+                }
 
                 // ===== 复测前置任务：补跑目标Job声明的 Prerequisites =====
                 // 复测时 _retestStartIndex 之前的任务会被跳过，但"设置速度""启动电机"这类任务
@@ -1909,6 +1946,8 @@ namespace TestingSoftware.ViewModels
                         break;
                     }
                 }
+                // 关闭实时监控（2A STOP + 2C 清除定义），再停协议栈
+                await Monitor.StopAsync();
                 await _udsService.StopAsync();
                 if (Status == JOB_PASS)
                 {
@@ -1930,6 +1969,7 @@ namespace TestingSoftware.ViewModels
             }
             catch (OperationCanceledException)
             {
+                await Monitor.StopAsync();
                 ChangeUI();
                 Log.Information("测试任务被手动终止");
                 _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, "测试任务被手动终止");
@@ -1937,6 +1977,7 @@ namespace TestingSoftware.ViewModels
             }
             catch (Exception ex)
             {
+                await Monitor.StopAsync();
                 ChangeUI();
                 Log.Error(ex, "Job测试主任务异常");
                 _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, $"Job测试主任务异常:{ex.Message}");
@@ -2025,7 +2066,7 @@ namespace TestingSoftware.ViewModels
                 [16384] = "MOSFET上管"
             };
 
-            if (value == 0) return map[0];
+            if (value == 0) return "无故障";
 
             // 逐个位检测并拼接
             var hits = map.Where(k => k.Key != 0 && (value & k.Key) == k.Key)

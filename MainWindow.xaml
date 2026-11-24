@@ -9,7 +9,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:view="clr-namespace:TestingSoftware.View"
     Width="1200"
-    Height="600"
+    Height="700"
     Icon="pack://application:,,,/Resources/ElectricControl.ico"
     mc:Ignorable="d">
     <Window.Resources>
@@ -129,6 +129,7 @@
             <RowDefinition Height="auto" />
             <RowDefinition Height="4" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Menu Grid.Row="0" HorizontalAlignment="Stretch">
@@ -338,5 +339,129 @@
                 </TextBlock.Text>
             </TextBlock>
         </Grid>
+
+        <!--  实时监控：母线电流 / 转速 / 电机温度 / 故障码（2C 定义动态 DID + 2A 主动上传）  -->
+        <Border
+            Grid.Row="8"
+            Background="#F5F7FA"
+            BorderBrush="#cccccc"
+            BorderThickness="0,1,0,0">
+            <Grid Margin="10,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel
+                    Grid.Column="0"
+                    Margin="0,0,14,0"
+                    VerticalAlignment="Center">
+                    <TextBlock FontSize="16" FontWeight="Bold" Text="实时监控" />
+                    <TextBlock
+                        MaxWidth="230"
+                        FontSize="12"
+                        Foreground="#666"
+                        Text="{Binding Monitor.MonitorStatus}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+
+                <UniformGrid
+                    Grid.Column="1"
+                    Columns="4"
+                    Rows="1">
+                    <Border
+                        Margin="4,0"
+                        Padding="12,6"
+                        Background="White"
+                        BorderBrush="#DDE3EA"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel>
+                            <TextBlock FontSize="13" Foreground="#666" Text="母线电流 (A)" />
+                            <TextBlock FontSize="26" FontWeight="Bold" Foreground="#1E54C2" Text="{Binding Monitor.BusCurrentText}" />
+                        </StackPanel>
+                    </Border>
+                    <Border
+                        Margin="4,0"
+                        Padding="12,6"
+                        Background="White"
+                        BorderBrush="#DDE3EA"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel>
+                            <TextBlock FontSize="13" Foreground="#666" Text="转速 (RPM)" />
+                            <TextBlock FontSize="26" FontWeight="Bold" Foreground="#1E54C2" Text="{Binding Monitor.MotorSpeedText}" />
+                        </StackPanel>
+                    </Border>
+                    <Border
+                        Margin="4,0"
+                        Padding="12,6"
+                        Background="White"
+                        BorderBrush="#DDE3EA"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel>
+                            <TextBlock FontSize="13" Foreground="#666" Text="电机温度 (℃)" />
+                            <TextBlock FontSize="26" FontWeight="Bold" Foreground="#1E54C2" Text="{Binding Monitor.MotorTemperatureText}" />
+                        </StackPanel>
+                    </Border>
+                    <Border
+                        Margin="4,0"
+                        Padding="12,6"
+                        Background="White"
+                        BorderBrush="#DDE3EA"
+                        BorderThickness="1"
+                        CornerRadius="6">
+                        <StackPanel>
+                            <TextBlock FontSize="13" Foreground="#666" Text="故障码" />
+                            <TextBlock FontSize="22" FontWeight="Bold" Text="{Binding Monitor.FaultCodeText}">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="#1E54C2" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Monitor.HasFault}" Value="True">
+                                                <Setter Property="Foreground" Value="#e53935" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock
+                                MaxWidth="150"
+                                FontSize="12"
+                                Foreground="#666"
+                                Text="{Binding Monitor.FaultText}"
+                                TextTrimming="CharacterEllipsis"
+                                ToolTip="{Binding Monitor.FaultText}" />
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+
+                <StackPanel
+                    Grid.Column="2"
+                    Margin="14,0,0,0"
+                    VerticalAlignment="Center">
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        FontSize="12"
+                        Foreground="#666"
+                        Text="{Binding Monitor.FrameRateText}" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        FontSize="11"
+                        Foreground="#999"
+                        Text="{Binding Monitor.FrameCountText}" />
+                    <Button
+                        Width="110"
+                        Height="32"
+                        Margin="0,4,0,0"
+                        Padding="8,2"
+                        Command="{Binding Monitor.ToggleMonitorCommand}"
+                        Content="{Binding Monitor.ToggleButtonText}"
+                        FontSize="15" />
+                </StackPanel>
+            </Grid>
+        </Border>
     </Grid>
 </Window>
