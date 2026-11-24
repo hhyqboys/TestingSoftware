@@ -573,13 +573,27 @@ namespace TestingSoftware.ViewModels
 
                 // Disconnect the uart after closing all modules which dependent on the uart.
                 result = await DisconnectAsync();
-                if (result == 0) SetConnectionState(false);
+                if (result == 0)
+                {
+                    // 断开成功后同样清掉连接失败的错误提示
+                    if (Status == -1 && TestStatusInfo == "设备打开关闭失败")
+                    {
+                        Status = 0;
+                        TestStatusInfo = string.Empty;
+                    }
+
+                    SetConnectionState(false);
+                }
             }
             else
             {
                 result = await ConnectAsync();
                 if (result == 0)
                 {
+                    // 连接成功要清掉上一次失败留下的红色提示，否则底部仍显示“设备打开关闭失败”
+                    Status = 0;
+                    TestStatusInfo = string.Empty;
+
                     SetConnectionState(true);
 
                     // 连接成功后自动开启实时监控（动态 DID + 2A 主动上传）；
