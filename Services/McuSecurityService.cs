@@ -309,7 +309,12 @@ namespace TestingSoftware.Services
 
             int level = await GetMcuLevelNoPop();
             if (level < 0)
-                return false;
+            {
+                // 部分固件不支持读诊断等级（22 F1 86 无应答，现场 ECU 只答 22 F1 89 会话）：
+                // 不直接判失败，按“未解锁”继续尝试进扩展会话 + 27 安全访问。
+                Log.Debug("安全访问：读取诊断等级（22 F1 86）无应答，按未解锁继续尝试");
+                level = 0;
+            }
 
             do
             {

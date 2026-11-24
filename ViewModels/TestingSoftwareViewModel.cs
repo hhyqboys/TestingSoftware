@@ -18,6 +18,7 @@ using TestingSoftware.Protocols;
 using TestingSoftware.Protocols.Diag;
 using TestingSoftware.Services;
 using TestingSoftware.Utilities;
+using TestingSoftware.View;
 using Windows.Foundation.Collections;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using Application = System.Windows.Application;
@@ -86,6 +87,11 @@ namespace TestingSoftware.ViewModels
         /// 采用“2C 定义动态 DID + 2A 开启主动上传”的方式接收下位机周期上报。
         /// </summary>
         public RealtimeMonitorViewModel Monitor { get; }
+
+        /// <summary>
+        /// 下位机 IO（GPIO）外部控制视图模型：2F 接管油门/刹车/档位输入通道。
+        /// </summary>
+        public IoControlViewModel IoControl { get; }
 
         /// <summary>
         /// The list of jobs that are currently visible in the UI.
@@ -360,6 +366,8 @@ namespace TestingSoftware.ViewModels
             _mcuSecurityService = new McuSecurityService(_udsService);
             // 实时监控面板（动态 DID + 2A 主动上传），与 UDS 服务共用同一链路
             Monitor = new RealtimeMonitorViewModel(_udsService, _mcuSecurityService);
+            // 下位机 IO（GPIO）外部控制：2F 0xD100/0xD101/0xD102，可与实时监控并存
+            IoControl = new IoControlViewModel(_udsService, _mcuSecurityService);
             //_lineConfigPageView = lineConfigPageView;
             _selectedSerialPort = Properties.Settings.Default.LastSerialPort;
             // 启动后立即扫一次串口，并每 1 秒自动刷新（界面不再提供手动扫描按钮）
@@ -532,6 +540,19 @@ namespace TestingSoftware.ViewModels
                 OnPropertyChanged(nameof(RetestJobAction));
             });
         }
+        /// <summary>
+        /// 打开下位机 IO（GPIO）外部控制窗口。
+        /// </summary>
+        public ICommand OpenIoControlAction => new SyncCommand(sender =>
+        {
+            IoControlWindow window = new IoControlWindow
+            {
+                Owner = Application.Current?.MainWindow,
+                DataContext = IoControl
+            };
+            window.Show();
+        });
+
         /// <summary>
         /// The method is to connect to a Bluetooth device.
         /// </summary>

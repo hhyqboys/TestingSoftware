@@ -99,6 +99,9 @@
                 <Separator />
                 <MenuItem Command="{Binding ExitAction}" Header="退出" InputGestureText="Alt+F4" />
             </MenuItem>
+            <MenuItem Header="工具">
+                <MenuItem Command="{Binding OpenIoControlAction}" Header="IO 控制（GPIO）" />
+            </MenuItem>
         </Menu>
 
         <TextBlock
