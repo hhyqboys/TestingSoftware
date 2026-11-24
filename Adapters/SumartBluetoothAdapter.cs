@@ -117,8 +117,7 @@ namespace TestingSoftware.Adapters
                 // 连接失败时彻底释放 GATT 客户端会话：
                 // 否则 Windows 侧会残留“已连接”，之后所有重连都会被这个僵尸会话挡住。
                 Log.Warning("蓝牙连接第 {Attempt}/2 次失败，清理 GATT 资源后重试", attempt);
-                await ReleaseGattResourcesAsync();
-                await Task.Delay(1_000);
+                await DisconnectRemainingLinkAsync();
             }
 
             return result;
@@ -131,8 +130,15 @@ namespace TestingSoftware.Adapters
         {
             int result = 0;
 
-            // 开连之前先释放上一轮可能残留的 GATT 对象（characteristic → service → device）
-            await ReleaseGattResourcesAsync();
+            // 开连之前先释放上一轮可能残留的 GATT 对象，并请求系统断掉残留链路
+            if (_device != null)
+            {
+                await DisconnectRemainingLinkAsync();
+            }
+            else
+            {
+                await ReleaseGattResourcesAsync();
+            }
 
             try
             {
@@ -423,29 +429,64 @@ namespace TestingSoftware.Adapters
                 result = -1;
             }
 
-            if (_device != null)
-            {
-                _device.ConnectionStatusChanged -= OnConnectionStatusChanged;
-                try
-                {
-                    using var session = await GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId);
-                    if (session != null)
-                    {
-                        session.MaintainConnection = false;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Debug(ex, "关闭 GattSession 保持连接失败");
-                }
-            }
+            // 关键：MaintainConnection=false 要“生效”后会话才能释放，
+            // 立刻 Dispose 会让 Windows 来不及下发断链，链路一直挂着（外设就不再发握手帧）。
+            await DisconnectRemainingLinkAsync();
 
-            // 关键：把 characteristic / service / device 全部释放，否则 Windows 会认为设备仍“已连接”
-            await ReleaseGattResourcesAsync();
-
-            await Task.Delay(1_000); // 等待蓝牙彻底断开
+            Log.Information("蓝牙断开完成（GATT 会话已释放）");
 
             return result;
+        }
+
+        /// <summary>
+        /// 请求系统断开物理链路并释放全部 GATT 资源：
+        /// 设 MaintainConnection=false → 释放 characteristic/service/device → 等系统完成断开 → 释放会话。
+        /// </summary>
+        private async Task DisconnectRemainingLinkAsync()
+        {
+            GattSession? session = await SetMaintainConnectionFalseAsync();
+
+            await ReleaseGattResourcesAsync();
+
+            // 给系统时间真正断开链路，这段时间会话必须保持存活
+            await Task.Delay(1_200);
+
+            try
+            {
+                session?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "释放 GattSession 失败");
+            }
+        }
+
+        /// <summary>
+        /// 取设备对应的 GattSession 并设置 MaintainConnection=false（请求系统断开物理链路）。
+        /// 返回的会话必须由调用方在断开耗时结束后再 Dispose，否则断开请求不会真正生效。
+        /// </summary>
+        private async Task<GattSession?> SetMaintainConnectionFalseAsync()
+        {
+            if (_device == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                GattSession? session = await GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId);
+                if (session != null)
+                {
+                    session.MaintainConnection = false;
+                }
+
+                return session;
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "设置 GattSession 保持连接为 false 失败");
+                return null;
+            }
         }
 
         /// <summary>
