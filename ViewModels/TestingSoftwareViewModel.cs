@@ -9,6 +9,7 @@ using System.Windows;
 using System.Windows.Forms;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using System.Xml.Serialization;
 using TestingSoftware.Adapters;
 using TestingSoftware.Commands;
@@ -56,6 +57,9 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         private ModBusService _modBusService;
         private bool _isConnectButtonEnabled = false;
+
+        /// <summary>串口自动扫描定时器（启动后每 1 秒刷新一次串口列表）。</summary>
+        private readonly DispatcherTimer? _serialScanTimer;
         /// <summary>
         /// The bluetooth view model.
         /// </summary>
@@ -358,7 +362,14 @@ namespace TestingSoftware.ViewModels
             Monitor = new RealtimeMonitorViewModel(_udsService, _mcuSecurityService);
             //_lineConfigPageView = lineConfigPageView;
             _selectedSerialPort = Properties.Settings.Default.LastSerialPort;
-            ScanSerialAction.Execute(null);
+            // 启动后立即扫一次串口，并每 1 秒自动刷新（界面不再提供手动扫描按钮）
+            RefreshSerialPorts();
+            _serialScanTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _serialScanTimer.Tick += (s, e) => RefreshSerialPorts();
+            _serialScanTimer.Start();
             if (Model == null)
             {
                 Model = new TestingSoftwareModel();
@@ -713,19 +724,60 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         public ICommand ScanSerialAction => new SyncCommand(sender =>
         {
-            //扫描串口
-            var serialPortList = SerialPort.GetPortNames();
-            SerialPortList.Clear();
-            foreach (var port in serialPortList)
+            //扫描串口（保留命令，界面已改为自动扫描）
+            RefreshSerialPorts();
+        });
+
+        /// <summary>
+        /// 刷新可用串口列表：仅在端口集合发生变化时重建，避免每秒刷新导致下拉框闪烁、选中项丢失。
+        /// </summary>
+        private void RefreshSerialPorts()
+        {
+            try
             {
-                SerialPortList.Add(port);
-                if (string.IsNullOrEmpty(SelectedSerialPort))
+                string[] ports = SerialPort.GetPortNames();
+
+                bool changed = ports.Length != SerialPortList.Count;
+                if (!changed)
                 {
-                    SelectedSerialPort = port;
+                    for (int i = 0; i < ports.Length; i++)
+                    {
+                        if (SerialPortList[i] != ports[i])
+                        {
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!changed) return;
+
+                string? current = SelectedSerialPort;
+                SerialPortList.Clear();
+                foreach (string port in ports)
+                {
+                    SerialPortList.Add(port);
+                }
+
+                // 保持原选中项，仍存在就继续选中；否则退回第一个端口
+                if (!string.IsNullOrEmpty(current) && Array.IndexOf(ports, current) >= 0)
+                {
+                    SelectedSerialPort = current;
+                }
+                else if (ports.Length > 0)
+                {
+                    SelectedSerialPort = ports[0];
+                }
+                else
+                {
+                    SelectedSerialPort = string.Empty;
                 }
             }
-
-        });
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "自动扫描串口失败");
+            }
+        }
         /// <summary>
         /// 退出
         /// </summary>
