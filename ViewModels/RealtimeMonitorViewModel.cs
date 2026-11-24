@@ -416,11 +416,6 @@ namespace TestingSoftware.ViewModels
                     return -4;
                 }
 
-#if DEBUG
-                // 仅 Debug 构建：收到 2A 正响应（6A）后切回默认会话 10 01，便于现场调试观察 ECU 会话行为
-                await SwitchToDefaultSessionInDebugAsync();
-#endif
-
                 // 4) 启动接收循环，持续消费周期帧。
                 Interlocked.Exchange(ref _frameCount, 0);
                 Interlocked.Exchange(ref _pendingFrames, 0);
@@ -552,31 +547,6 @@ namespace TestingSoftware.ViewModels
                 Log.Warning(ex, "实时监控：进入扩展会话异常");
             }
         }
-
-#if DEBUG
-        /// <summary>
-        /// 仅 Debug 构建：2A 返回 6A 后切回默认会话（10 01），供现场调试观察会话切换后的 ECU 行为。
-        /// Release 编译时该方法与调用点都不存在。
-        /// </summary>
-        private async Task SwitchToDefaultSessionInDebugAsync()
-        {
-            try
-            {
-                Service10 service10 = new Service10
-                {
-                    Subfunc = Service10.DEFAULT_SESSION
-                };
-
-                Pdu? response = await _uds.Request(service10.BuildRequest());
-                int result = response == null ? -1 : service10.ParseResponse(response);
-                Log.Debug("实时监控(Debug)：2A 成功(6A)后切换默认会话 10 01，返回 {Result}", result);
-            }
-            catch (Exception ex)
-            {
-                Log.Warning(ex, "实时监控(Debug)：切换默认会话异常");
-            }
-        }
-#endif
 
         /// <summary>
         /// 复位：2A(STOP) 关闭上报 + 2C(清除定义) 清空动态 DID。
