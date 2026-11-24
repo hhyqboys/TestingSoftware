@@ -102,7 +102,6 @@ namespace TestingSoftware.ViewModels
         private long _lastDisconnectMs;
 
         private bool _canClickConnect = true;
-        private DispatcherTimer? _reconnectLockTimer;
 
         /// <summary>
         /// “链接/断开”按钮是否可点击：断开后 3 秒内为 false，防止用户高频反复建连。
@@ -118,25 +117,39 @@ namespace TestingSoftware.ViewModels
         }
 
         /// <summary>
+        /// 线程安全地设置按钮可点击状态（断开可能发生在蓝牙事件线程，不能直接改依赖属性）。
+        /// </summary>
+        private void SetCanClickConnect(bool value)
+        {
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher != null && !dispatcher.CheckAccess())
+            {
+                dispatcher.InvokeAsync(() => CanClickConnect = value);
+                return;
+            }
+
+            CanClickConnect = value;
+        }
+
+        /// <summary>
         /// 在指定时长内禁用连接按钮，到时自动恢复。
+        /// 用 Task.Delay 而非 DispatcherTimer：本方法可能在非 UI 线程调用，DispatcherTimer 会因线程归属而永不触发。
         /// </summary>
         private void LockReconnectFor(int milliseconds)
         {
-            CanClickConnect = false;
+            SetCanClickConnect(false);
 
-            if (_reconnectLockTimer == null)
+            _ = Task.Run(async () =>
             {
-                _reconnectLockTimer = new DispatcherTimer(DispatcherPriority.Background);
-                _reconnectLockTimer.Tick += (s, e) =>
+                try
                 {
-                    _reconnectLockTimer?.Stop();
-                    CanClickConnect = true;
-                };
-            }
-
-            _reconnectLockTimer.Stop();
-            _reconnectLockTimer.Interval = TimeSpan.FromMilliseconds(milliseconds);
-            _reconnectLockTimer.Start();
+                    await Task.Delay(milliseconds);
+                }
+                finally
+                {
+                    SetCanClickConnect(true);
+                }
+            });
         }
 
 
@@ -640,6 +653,9 @@ namespace TestingSoftware.ViewModels
                     // 连接成功要清掉上一次失败留下的红色提示，否则底部仍显示“设备打开关闭失败”
                     Status = 0;
                     TestStatusInfo = string.Empty;
+
+                    // 连接成功后按钮必须立即可用（此时点它是“断开”，不受 3 秒锁限制）
+                    SetCanClickConnect(true);
 
                     SetConnectionState(true);
 
