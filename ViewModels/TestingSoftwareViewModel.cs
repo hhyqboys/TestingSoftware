@@ -94,6 +94,53 @@ namespace TestingSoftware.ViewModels
         public IoControlViewModel IoControl { get; }
 
         /// <summary>
+        /// 断开与再次连接之间的强制最小间隔（毫秒）：给 Windows 与下位机留出释放旧链路的时间。
+        /// </summary>
+        private const long ReconnectGuardMs = 3_000;
+
+        /// <summary>最近一次断开动作完成的时刻（HighResolutionTimer.Milliseconds）。</summary>
+        private long _lastDisconnectMs;
+
+        private bool _canClickConnect = true;
+        private DispatcherTimer? _reconnectLockTimer;
+
+        /// <summary>
+        /// “链接/断开”按钮是否可点击：断开后 3 秒内为 false，防止用户高频反复建连。
+        /// </summary>
+        public bool CanClickConnect
+        {
+            get => _canClickConnect;
+            private set
+            {
+                _canClickConnect = value;
+                OnPropertyChanged(nameof(CanClickConnect));
+            }
+        }
+
+        /// <summary>
+        /// 在指定时长内禁用连接按钮，到时自动恢复。
+        /// </summary>
+        private void LockReconnectFor(int milliseconds)
+        {
+            CanClickConnect = false;
+
+            if (_reconnectLockTimer == null)
+            {
+                _reconnectLockTimer = new DispatcherTimer(DispatcherPriority.Background);
+                _reconnectLockTimer.Tick += (s, e) =>
+                {
+                    _reconnectLockTimer?.Stop();
+                    CanClickConnect = true;
+                };
+            }
+
+            _reconnectLockTimer.Stop();
+            _reconnectLockTimer.Interval = TimeSpan.FromMilliseconds(milliseconds);
+            _reconnectLockTimer.Start();
+        }
+
+
+        /// <summary>
         /// The list of jobs that are currently visible in the UI.
         /// </summary>
         public ObservableCollection<Job> VisibleJobs { get; } = new ObservableCollection<Job>();
@@ -652,6 +699,13 @@ namespace TestingSoftware.ViewModels
             }
 
             result = await (BluetoothViewAdapter.Model?.StopAsync() ?? Task.FromResult(-1));
+
+            // 记录断开完成时刻：后续连接必须与本次断开间隔至少 ReconnectGuardMs
+            _lastDisconnectMs = HighResolutionTimer.Milliseconds;
+            // 同时锁住“链接”按钮，3 秒内不允许点击（避免用户手快反复建连）
+            LockReconnectFor((int)ReconnectGuardMs);
+            Log.Information("蓝牙断开结束，距下次允许连接至少 {Guard}ms", ReconnectGuardMs);
+
             return result;
         }
 
@@ -662,6 +716,18 @@ namespace TestingSoftware.ViewModels
         public async Task<int> ConnectAsync()
         {
             int result = -1;
+
+            // 强制断开与再次连接之间至少间隔 3 秒，给系统与下位机留出释放旧链路的时间
+            if (_lastDisconnectMs > 0)
+            {
+                long elapsed = HighResolutionTimer.Milliseconds - _lastDisconnectMs;
+                if (elapsed >= 0 && elapsed < ReconnectGuardMs)
+                {
+                    int wait = (int)(ReconnectGuardMs - elapsed);
+                    Log.Information("蓝牙重连保护：距上次断开 {Elapsed}ms，等待 {Wait}ms 后再连接", elapsed, wait);
+                    await Task.Delay(wait);
+                }
+            }
 
             // 根据输入的MAC地址设置目标蓝牙设备（不带冒号，12位十六进制）
             if (!string.IsNullOrWhiteSpace(MacAddressInput))

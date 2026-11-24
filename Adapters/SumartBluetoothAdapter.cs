@@ -116,8 +116,11 @@ namespace TestingSoftware.Adapters
 
                 // 连接失败时彻底释放 GATT 客户端会话：
                 // 否则 Windows 侧会残留“已连接”，之后所有重连都会被这个僵尸会话挡住。
-                Log.Warning("蓝牙连接第 {Attempt}/2 次失败，清理 GATT 资源后重试", attempt);
+                Log.Warning("蓝牙连接第 {Attempt}/2 次失败，清理 GATT 资源后等待 3 秒再重试", attempt);
                 await DisconnectRemainingLinkAsync();
+
+                // 两次连接动作之间至少间隔 3 秒，避免下位机还没释放上一条链路就再次建连
+                await Task.Delay(3_000);
             }
 
             return result;

@@ -161,6 +161,7 @@
                 Padding="4,2"
                 Command="{Binding ConnectAction}"
                 FontSize="15"
+                IsEnabled="{Binding CanClickConnect}"
                 ToolTip="{Binding ConnectionLabel}">
                 <StackPanel Orientation="Horizontal">
                     <icon:PackIconPhosphorIcons
