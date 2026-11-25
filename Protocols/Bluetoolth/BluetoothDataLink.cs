@@ -223,12 +223,42 @@ namespace TestingSoftware.Protocols.Bluetoolth
         {
 
             byte[] data = evt.CharacteristicValue.ToArray();
-            string formated = BitConverter.ToString(data);
-            Log.Information($"Bluetooth Rx: Data:{formated}");
+
+            // 周期上报帧（55-AA + 长度 + 动态 DID 低字节 0xE3）不再打印：2A 主动上传时每秒几十帧，会把日志刷爆
+            if (!IsPeriodicUploadFrame(data))
+            {
+                string formated = BitConverter.ToString(data);
+                Log.Information($"Bluetooth Rx: Data:{formated}");
+            }
+
             _rxBuffer.AddData(data);
 
 
 
+        }
+
+        /// <summary>
+        /// 判定是否为“2A 主动上传的周期数据帧”：
+        /// 帧头 55-AA（或反序），payload 首字节为动态 DID 低字节 0xE3，且整包正好是这一帧（未夹带其它 PDU）。
+        /// </summary>
+        private static bool IsPeriodicUploadFrame(byte[] data)
+        {
+            if (data == null || data.Length < 5)
+            {
+                return false;
+            }
+
+            bool head = (data[0] == 0x55 && data[1] == 0xAA) || (data[0] == 0xAA && data[1] == 0x55);
+            if (!head || data[4] != 0xE3)
+            {
+                return false;
+            }
+
+            // 帧结构：2 字节头 + 2 字节长度 + payload + 2 字节校验
+            int payloadLengthA = (data[2] << 8) | data[3];
+            int payloadLengthB = (data[3] << 8) | data[2];
+
+            return data.Length == payloadLengthA + 6 || data.Length == payloadLengthB + 6;
         }
 
         /// <summary>
