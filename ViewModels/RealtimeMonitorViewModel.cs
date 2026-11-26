@@ -64,12 +64,26 @@ namespace TestingSoftware.ViewModels
 
         private long _frameCount;
         private long _pendingFrames;
+        /// <summary>最近一帧周期数据被解析的时刻（HighResolutionTimer.Milliseconds），用于判定实时数据是否新鲜。</summary>
+        private long _lastFrameMs;
         private int _frameRate;
         private long _lastNotifyMs = -UiNotifyMinIntervalMs;
         private long _lastRateMs;
 
         private bool _isMonitoring;
         private string _monitorStatus = "未开启（点击“开始监控”或开始测试后自动开启）";
+
+        /// <summary>实时数据是否有效：收到新帧=true；断连 / 长时间无新帧=false，界面统一显示 FF。</summary>
+        private bool _dataValid;
+
+        /// <summary>数据无效时界面显示的占位文字。</summary>
+        private const string StaleText = "FF";
+
+        /// <summary>实时数据有效期：超过该时间没有新帧，即按无效数据处理（显示 FF）。</summary>
+        private const int DataStaleTimeoutMs = 2000;
+
+        /// <summary>数据新鲜度看门狗（500ms 一次）：Windows 断连事件会晚到，这里按帧时间自行判定。</summary>
+        private readonly DispatcherTimer _staleTimer;
 
         private double _busCurrent;
         private double _motorSpeed;
@@ -96,6 +110,16 @@ namespace TestingSoftware.ViewModels
 
         /// <summary>安全访问连续失败次数；达 2 次后本连接内不再重复尝试（固件可能不支持读 22 F1 86）。</summary>
         private int _securityFailures;
+
+        /// <summary>
+        /// 开启 / 停止监控的串行锁。连接成功后主流程与测试启动流程会同时调用 StartAsync，
+        /// 两个 StartAsync 并发下发 2C/2A 会互相抢应答（日志里成串的 "Uds received async is null"），
+        /// 这里保证同一时刻只有一个在跑。
+        /// </summary>
+        private readonly SemaphoreSlim _lifecycleLock = new SemaphoreSlim(1, 1);
+
+        /// <summary>本次连接内是否已收到过 2A(快速率) 的 6A 正响应（即下位机已在上报）。</summary>
+        private bool _uploadStarted;
 
         /// <summary>
         /// 属性变更事件。
@@ -156,6 +180,14 @@ namespace TestingSoftware.ViewModels
             Configure(null);
 
             ToggleMonitorCommand = new AsyncCommand(async _ => await ToggleAsync());
+
+            // 数据新鲜度看门狗：断链后 Windows 事件可能晚到一两分钟，界面不能一直挂着旧值
+            _staleTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(500)
+            };
+            _staleTimer.Tick += (s, e) => CheckDataFreshness();
+            _staleTimer.Start();
         }
 
         #region 可绑定属性
@@ -195,51 +227,51 @@ namespace TestingSoftware.ViewModels
         }
 
         /// <summary>
-        /// 母线电流显示值（A）。
+        /// 母线电流显示值（A）；数据无效（断连 / 超时）显示 FF。
         /// </summary>
-        public string BusCurrentText => $"{_busCurrent:F1}";
+        public string BusCurrentText => _dataValid ? $"{_busCurrent:F1}" : StaleText;
 
         /// <summary>
-        /// 转速显示值（RPM）。
+        /// 转速显示值（RPM）；数据无效（断连 / 超时）显示 FF。
         /// </summary>
-        public string MotorSpeedText => $"{_motorSpeed:F0}";
+        public string MotorSpeedText => _dataValid ? $"{_motorSpeed:F0}" : StaleText;
 
         /// <summary>
-        /// 电机温度显示值（℃）。
+        /// 电机温度显示值（℃）；数据无效（断连 / 超时）显示 FF。
         /// </summary>
-        public string MotorTemperatureText => $"{_motorTemperature:F1}";
+        public string MotorTemperatureText => _dataValid ? $"{_motorTemperature:F1}" : StaleText;
 
         /// <summary>
-        /// 故障码原始位掩码（十六进制显示）。
+        /// 故障码原始位掩码（十六进制显示）；数据无效（断连 / 超时）显示 FF。
         /// </summary>
-        public string FaultCodeText => $"0x{_faultCode:X4}";
+        public string FaultCodeText => _dataValid ? $"0x{_faultCode:X4}" : StaleText;
 
         /// <summary>
         /// 故障码翻译结果。
         /// </summary>
-        public string FaultText => _faultCode == 0 ? "无故障" : TestingSoftwareViewModel.GetFaultText(_faultCode);
+        public string FaultText => !_dataValid ? "数据无效" : (_faultCode == 0 ? "无故障" : TestingSoftwareViewModel.GetFaultText(_faultCode));
 
         /// <summary>
-        /// 是否存在故障（用于界面告警着色）。
+        /// 是否存在故障（用于界面告警着色）；数据无效时不报警。
         /// </summary>
-        public bool HasFault => _faultCode != 0;
+        public bool HasFault => _dataValid && _faultCode != 0;
 
         /// <summary>
-        /// 上报速率显示。
+        /// 上报速率显示；数据无效时显示 FF。
         /// </summary>
-        public string FrameRateText => _frameRate > 0 ? $"约 {_frameRate} 帧/秒" : "等待数据…";
+        public string FrameRateText => _dataValid ? $"约 {_frameRate} 帧/秒" : StaleText;
 
         /// <summary>
-        /// 累计接收帧数显示。
+        /// 累计接收帧数显示（每次连接清零）。
         /// </summary>
         public string FrameCountText => $"累计 {_frameCount} 帧";
 
         #region 仪表绑定值
 
         /// <summary>
-        /// 母线电流仪表当前值（A）。
+        /// 母线电流仪表当前值（A）；数据无效时归零，避免指针停在旧值上误导。
         /// </summary>
-        public double BusCurrentValue => _busCurrent;
+        public double BusCurrentValue => _dataValid ? _busCurrent : 0;
 
         /// <summary>
         /// 母线电流仪表量程上限（A）：历史峰值 + 30，只增不减。
@@ -247,9 +279,17 @@ namespace TestingSoftware.ViewModels
         public double BusCurrentMaximum => Math.Max(BusCurrentMargin, Math.Ceiling(_busCurrentPeak + BusCurrentMargin));
 
         /// <summary>
-        /// 转速仪表当前值（RPM）。
+        /// 转速仪表当前值（RPM）；数据无效时归零。
         /// </summary>
-        public double MotorSpeedValue => _motorSpeed;
+        public double MotorSpeedValue => _dataValid ? _motorSpeed : 0;
+
+        /// <summary>
+        /// 当前转速（RPM），直接从最近一帧 2A 周期数据取，不受 UI 限频影响，供测试判定使用。
+        /// </summary>
+        public double CurrentMotorSpeed => ToDouble(MotorSpeedSignal);
+
+        /// <summary>最近一帧周期数据的解析时刻（毫秒）；0 表示还没收到过数据。</summary>
+        public long LastFrameMs => _lastFrameMs;
 
         /// <summary>
         /// 转速仪表量程上限（RPM）：历史峰值 + 200，只增不减。
@@ -257,9 +297,9 @@ namespace TestingSoftware.ViewModels
         public double MotorSpeedMaximum => Math.Max(MotorSpeedMargin, Math.Ceiling(_motorSpeedPeak + MotorSpeedMargin));
 
         /// <summary>
-        /// 电机温度仪表当前值（℃）。
+        /// 电机温度仪表当前值（℃）；数据无效时归零。
         /// </summary>
-        public double MotorTemperatureValue => _motorTemperature;
+        public double MotorTemperatureValue => _dataValid ? _motorTemperature : 0;
 
         /// <summary>
         /// 电机温度仪表量程上限（固定 0~200℃）。
@@ -320,11 +360,27 @@ namespace TestingSoftware.ViewModels
         /// <returns>0 成功，其它为失败。</returns>
         public async Task<int> StartAsync()
         {
-            if (IsMonitoring) return 0;
+            await _lifecycleLock.WaitAsync();
+            try
+            {
+                if (IsMonitoring) return 0;
+                return await StartCoreAsync();
+            }
+            finally
+            {
+                _lifecycleLock.Release();
+            }
+        }
 
+        /// <summary>真正的开启流程；调用方必须已持有 _lifecycleLock。</summary>
+        private async Task<int> StartCoreAsync()
+        {
             // 蓝牙已连上时 UDS 接收任务可能还没起，这里补一次启动，保证能收到 2A 周期帧。
             if (!_uds.Running)
             {
+                // 协议栈重启 = 新会话：扩展会话与"上报已开启"状态都归零
+                _sessionPrepared = false;
+                _uploadStarted = false;
                 try
                 {
                     await _uds.StartAsync();
@@ -343,18 +399,20 @@ namespace TestingSoftware.ViewModels
 
             try
             {
-                // 安全访问失败通常是固件不带 22 F1 86 读取，连续失败后不再重复尝试，避免每次卡 1.5s
-                if (_securityFailures < 2)
+                // 2A / 2C 只在扩展会话下被固件接受：默认会话下发直接回 7F xx 7F，
+                // 日志里连接成功后连试 3 次全废就是这么来的。这里先尽力进 10 03。
+                if (!_sessionPrepared)
                 {
-                    Service10 service10 = new Service10();
-                    service10.Subfunc = Service10.EXTENDED_DIAG_SESSION;
-                    var request = service10.BuildRequest();
-                    await _uds.Request(request);
-                    _securityFailures = 0;
+                    await TryExtendedSessionAsync();
+                    _sessionPrepared = _uds.Running;
                 }
 
-                // 先复位下位机可能残留的周期上报与动态定义，避免长度/顺序错位。
-                await ResetPeriodDidAsync();
+                // 先复位下位机可能残留的周期上报与动态定义，避免长度/顺序错位；
+                // 本轮上报已确认在跑时不要复位，否则和随后的 2A 互相打架。
+                if (!_uploadStarted)
+                {
+                    await ResetPeriodDidAsync();
+                }
 
                 // 1) 由监控通道重新构建动态 DID，并下发 2C（defineDataByDataIdentifier）。
                 _dynamicDid.Clear();
@@ -384,27 +442,38 @@ namespace TestingSoftware.ViewModels
                 _uds.Pid = (byte)(DYNAMIC_DID & 0xFF);
 
                 // 3) 下发 2A 以快速率开启下位机主动上传。
-                Service2a service2a = new Service2a
+                //    本轮已经拿到过 6A（下位机正在上报）就不要再发一次：上报洪水期再发 2A 抢不到应答，
+                //    这正是之前"2A 开启失败返回 -4、重试三次全废"的原因。
+                if (_uploadStarted)
                 {
-                    Mode = Service2a.FAST_RATE,
-                    Ids = new byte[] { (byte)(DYNAMIC_DID & 0xFF) }
-                };
+                    Log.Information("实时监控：本轮主动上传已开启，跳过重复下发 2A");
+                }
+                else
+                {
+                    Service2a service2a = new Service2a
+                    {
+                        Mode = Service2a.FAST_RATE,
+                        Ids = new byte[] { (byte)(DYNAMIC_DID & 0xFF) }
+                    };
 
-                response = await _uds.Request(service2a.BuildRequest());
-                result = response == null ? -1 : service2a.ParseResponse(response);
-                if (result != 0)
-                {
-                    MonitorStatus = "开启主动上传（2A 快速率）失败";
-                    Log.Warning("实时监控：2A 开启主动上传失败，返回 {Result}", result);
-                    _uds.Pid = 0;
-                    return -4;
+                    // 本版固件 2A 开启后直接进入周期上报，通常不回 6A（实测迟到 2s 左右），
+                    // 用 Request2aAsync：只把 7F 2A NRC 判为失败，超时无否定响应按已下发处理。
+                    var ack = await _uds.Request2aAsync(service2a.BuildRequest());
+                    if (ack.Result != 0)
+                    {
+                        int nrc = ack.Response?.Data is { Length: >= 3 } d && d[0] == 0x7F ? d[2] : -1;
+                        MonitorStatus = nrc >= 0 ? $"开启主动上传失败（NRC 0x{nrc:X2}）" : "开启主动上传失败（发送异常）";
+                        Log.Warning("实时监控：2A 开启主动上传失败，结果 {Result}，NRC 0x{Nrc:X2}", ack.Result, nrc);
+                        _uds.Pid = 0;
+                        return -4;
+                    }
+
+                    _uploadStarted = true;
                 }
 
                 // 4) 启动接收循环，持续消费周期帧。
-                Interlocked.Exchange(ref _frameCount, 0);
-                Interlocked.Exchange(ref _pendingFrames, 0);
-                _frameRate = 0;
-                _lastRateMs = HighResolutionTimer.Milliseconds;
+                //    每次（重）连接都清零帧数统计；首帧到达前数据按无效处理（显示 FF）。
+                ResetStatistics();
                 _lastNotifyMs = -UiNotifyMinIntervalMs;
 
                 IsMonitoring = true;
@@ -465,6 +534,20 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         public async Task<int> StopAsync()
         {
+            await _lifecycleLock.WaitAsync();
+            try
+            {
+                return await StopCoreAsync();
+            }
+            finally
+            {
+                _lifecycleLock.Release();
+            }
+        }
+
+        /// <summary>真正的停止流程；调用方必须已持有 _lifecycleLock。</summary>
+        private async Task<int> StopCoreAsync()
+        {
             // 先停止接收，避免解析线程与关闭命令互相干扰。
             _cts?.Cancel();
             if (_rxTask != null)
@@ -488,6 +571,12 @@ namespace TestingSoftware.ViewModels
 
             bool wasMonitoring = IsMonitoring;
             IsMonitoring = false;
+
+            // 停止/断连后界面不再显示旧数据：帧率与四项实时值统一置 FF
+            InvalidateData("已停止主动上传");
+
+            // 上报已被 2A(STOP) 关掉，下次开启需要重新下发 2A
+            _uploadStarted = false;
 
             int result = 0;
             if (_uds.Running && wasMonitoring)
@@ -550,10 +639,10 @@ namespace TestingSoftware.ViewModels
                     Mode = Service2a.STOP,
                     Ids = new byte[] { (byte)(DYNAMIC_DID & 0xFF) }
                 };
-                Pdu? response = await _uds.Request(service2a.BuildRequest(), token);
-                if (response != null)
+                var ack = await _uds.Request2aAsync(service2a.BuildRequest(), token);
+                if (ack.Result != 0 && ack.Response != null)
                 {
-                    result = service2a.ParseResponse(response);
+                    result = service2a.ParseResponse(ack.Response);
                 }
             }
             catch (Exception ex)
@@ -614,6 +703,7 @@ namespace TestingSoftware.ViewModels
 
                     Interlocked.Increment(ref _frameCount);
                     Interlocked.Increment(ref _pendingFrames);
+                    _lastFrameMs = HighResolutionTimer.Milliseconds;
                     NotifyUiIfDue();
                 }
                 catch (OperationCanceledException)
@@ -625,6 +715,99 @@ namespace TestingSoftware.ViewModels
                     Log.Warning(ex, "实时监控：解析周期上报帧失败");
                 }
             }
+        }
+
+        /// <summary>
+        /// 每次（重）连接时清零帧数统计与速率，并把实时值置为无效（显示 FF），
+        /// 等首帧周期数据到达后自动恢复显示。
+        /// </summary>
+        public void ResetStatistics()
+        {
+            Interlocked.Exchange(ref _frameCount, 0);
+            Interlocked.Exchange(ref _pendingFrames, 0);
+            _frameRate = 0;
+            _lastRateMs = HighResolutionTimer.Milliseconds;
+            _lastFrameMs = 0;
+
+            InvalidateData("连接重置");
+
+            void applyCount()
+            {
+                OnPropertyChanged(nameof(FrameCountText));
+                OnPropertyChanged(nameof(FrameRateText));
+            }
+
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher != null && !dispatcher.HasShutdownStarted && !dispatcher.CheckAccess())
+            {
+                dispatcher.InvokeAsync(applyCount, DispatcherPriority.Background);
+            }
+            else
+            {
+                applyCount();
+            }
+        }
+
+        /// <summary>
+        /// 数据新鲜度检查（500ms 一次）：超时没有新帧就把数据置为无效（显示 FF）。
+        /// </summary>
+        private void CheckDataFreshness()
+        {
+            if (!_dataValid) return;
+
+            long now = HighResolutionTimer.Milliseconds;
+            if (_lastFrameMs <= 0 || now - _lastFrameMs > DataStaleTimeoutMs)
+            {
+                Log.Debug("实时监控：已 {Silence}ms 未收到新帧，数据置为无效（显示 FF）", now - _lastFrameMs);
+                InvalidateData("数据超时");
+            }
+        }
+
+        /// <summary>
+        /// 把实时数据标记为无效：界面四项显示 FF、仪表归零、帧率显示 FF。
+        /// </summary>
+        private void InvalidateData(string reason)
+        {
+            void apply()
+            {
+                _dataValid = false;
+                _frameRate = 0;
+                RaiseDataProperties();
+
+                // 故障明细表同时清空，避免断连后仍挂着上一次的故障条目
+                if (FaultItems.Count > 0)
+                {
+                    FaultItems.Clear();
+                    OnPropertyChanged(nameof(FaultSummaryText));
+                }
+            }
+
+            Dispatcher? dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher != null && !dispatcher.HasShutdownStarted && !dispatcher.CheckAccess())
+            {
+                dispatcher.InvokeAsync(apply, DispatcherPriority.Background);
+            }
+            else
+            {
+                apply();
+            }
+
+            Log.Debug("实时监控：数据置为无效（{Reason}），界面显示 FF", reason);
+        }
+
+        /// <summary>推送与实时数据相关的全部显示属性。</summary>
+        private void RaiseDataProperties()
+        {
+            OnPropertyChanged(nameof(BusCurrentText));
+            OnPropertyChanged(nameof(MotorSpeedText));
+            OnPropertyChanged(nameof(MotorTemperatureText));
+            OnPropertyChanged(nameof(FaultCodeText));
+            OnPropertyChanged(nameof(FaultText));
+            OnPropertyChanged(nameof(HasFault));
+            OnPropertyChanged(nameof(BusCurrentValue));
+            OnPropertyChanged(nameof(MotorSpeedValue));
+            OnPropertyChanged(nameof(MotorTemperatureValue));
+            OnPropertyChanged(nameof(FrameRateText));
         }
 
         /// <summary>
@@ -651,6 +834,13 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         private void UpdateValues()
         {
+            // 已停止/断连时丢弃迟到的刷新，保持 FF 显示；否则说明刚解析到真实帧，数据恢复有效
+            if (!IsMonitoring)
+            {
+                return;
+            }
+            _dataValid = true;
+
             long now = HighResolutionTimer.Milliseconds;
             long frames = Interlocked.Exchange(ref _pendingFrames, 0);
             long elapsed = now - _lastRateMs;

@@ -33,8 +33,14 @@ namespace TestingSoftware.Protocols.Diag
 
         /// <summary>
         /// The channel is used to cache all received periodic Pdus.
+        /// 用 DropOldest：2A 快速率上报时每秒几十帧，消费端跟不上就丢最旧的，绝不反压到蓝牙解析线程。
         /// </summary>
-        private Channel<Pdu> _periodicPdus = Channel.CreateBounded<Pdu>(200);
+        private Channel<Pdu> _periodicPdus = Channel.CreateBounded<Pdu>(new BoundedChannelOptions(200)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false
+        });
         /// <summary>
         /// Lower level machine reports message cache
         /// </summary>
@@ -50,6 +56,16 @@ namespace TestingSoftware.Protocols.Diag
         /// The periodical data identifier list for service 2A
         /// </summary>
         public byte Pid { get; set; }
+
+        /// <summary>
+        /// 最近一次收到任意 PDU（应答或周期帧）的时刻，用于链路假死看门狗。
+        /// </summary>
+        public long LastRxMs { get; private set; } = -1;
+
+        /// <summary>
+        /// 最近一次下发请求的时刻，用于判断“发出去了但一直没回”。
+        /// </summary>
+        public long LastRequestMs { get; private set; } = -1;
 
         /// <summary>
         /// 最近一次正常（非3E）UDS请求的发送时刻（HighResolutionTimer.Milliseconds）。
@@ -1165,7 +1181,14 @@ namespace TestingSoftware.Protocols.Diag
                                 result = Validate3EResponse(pdu);
                                 break;
 
+                            case 0x7F:
+                                // 否定响应（7F SID NRC）属合法应答，放行交由上层按服务 ID + NRC 解析
+                                result = 0;
+                                break;
+
                             default:
+                                // 未知 SID：视为错位/非本服务帧，拒绝放行，避免被当成当前请求应答
+                                result = -3;
                                 break;
                         }
                     }
@@ -1255,6 +1278,10 @@ namespace TestingSoftware.Protocols.Diag
             try
             {
                 pdu = await _readPdus.Reader.ReadAsync(token);
+                if (pdu != null)
+                {
+                    LastRxMs = HighResolutionTimer.Milliseconds;
+                }
             }
             catch (Exception)
             {
@@ -1262,6 +1289,95 @@ namespace TestingSoftware.Protocols.Diag
             }
 
             return pdu;
+        }
+
+        /// <summary>排空指定通道内残留的 PDU。</summary>
+        private static void DrainChannel(Channel<Pdu> channel)
+        {
+            while (channel.Reader.TryRead(out _)) { }
+        }
+
+        /// <summary>
+        /// 清空应答 / 周期两个接收通道，并清掉低层重组缓冲。重连、重试、重新开启监控前调用，
+        /// 避免上一轮残留的 burst 周期帧污染下一轮请求应答匹配。
+        /// </summary>
+        public void ClearBuffers()
+        {
+            DrainChannel(_readPdus);
+            DrainChannel(_periodicPdus);
+            if (LowLevelProtocol is BluetoothDataLink link)
+            {
+                link.ClearRxBuffer();
+            }
+        }
+
+        /// <summary>
+        /// 下发 2A（开启 / 停止主动上传）。本版固件对 2A 开启通常不回 0x6A 正响应，
+        /// 下发后直接进入周期上报，因此这里只把 7F 2A 否定响应判为失败；
+        /// 等待超时（固件不回 ACK）按指令已成功下发处理。
+        /// </summary>
+        /// <returns>Result：0=成功（收到 6A 或超时无否定响应）；1=收到否定响应；-1=发送异常。Response 为收到的帧。</returns>
+        public async Task<(int Result, Pdu? Response)> Request2aAsync(Pdu pdu, CancellationToken token = default)
+        {
+            // 无论是否传入外部 token，都必须叠加一个 500ms 超时：
+            // 否则断链重启时传入的会话 token 会让等待永不结束（固件本来就不回 ACK）。
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeoutCts.CancelAfter(500);
+            CancellationToken ct = timeoutCts.Token;
+
+            DrainChannel(_readPdus);
+
+            int validate = ValidateRequest(pdu);
+            if (validate != 0)
+            {
+                return (-1, null);
+            }
+
+            try
+            {
+                await TransmitAsync(pdu, ct);
+                LastRequestMs = HighResolutionTimer.Milliseconds;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to transmit the 2A request");
+                return (-1, null);
+            }
+
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    Pdu? p = await ReceivedAsync(ct);
+                    if (p == null) break; // 等待超时：固件不回 ACK，按成功处理
+                    if (p.Data == null || p.Data.Length == 0) continue;
+
+                    // 否定响应 7F 2A NRC
+                    if (p.Data[0] == 0x7F && p.Data.Length >= 3 && p.Data[1] == 0x2A)
+                    {
+                        return (1, p);
+                    }
+                    // 正响应 6A
+                    if (p.Data[0] == 0x6A)
+                    {
+                        return (0, p);
+                    }
+
+                    // 其余错位帧 / 心跳帧 / 残留周期帧：丢弃，继续等待
+                }
+            }
+            catch
+            {
+                // 超时按成功处理
+            }
+
+            // 外部 token（会话/任务）被取消时如实上报，避免断链重启误判为成功
+            if (token.IsCancellationRequested)
+            {
+                return (-1, null);
+            }
+
+            return (0, null);
         }
 
         public override async Task<int> StartAsync()
@@ -1376,6 +1492,7 @@ namespace TestingSoftware.Protocols.Diag
                 {
                     // Transmit the request.
                     result = await TransmitAsync(pdu, token);
+                    LastRequestMs = HighResolutionTimer.Milliseconds;
                 }
                 catch (Exception ex)
                 {
@@ -1401,38 +1518,59 @@ namespace TestingSoftware.Protocols.Diag
                 bool isPending = false;
 
                 // Save the P2 and P2* here
-                int p2 = GetParameter<int>(UDS_P2_MAX) > 0 ? GetParameter<int>(UDS_P2_MAX) : 50;
+                int p2 = GetParameter<int>(UDS_P2_MAX) > 0 ? GetParameter<int>(UDS_P2_MAX) : 300;
                 int p2star = GetParameter<int>(UDS_P2_STAR) > 0 ? GetParameter<int>(UDS_P2_STAR) : 5000;
 
+                // 按 SID 匹配应答：固件存在"上一轮应答迟到"（实测 2A 的 6A 会晚到 2s 左右），
+                // 迟到帧若被当前请求吃掉，后面 2C/22/27 会整串错位（日志里的 -1、2C 定义失败、解锁失败）。
+                byte reqSid = pdu.Data![0];
+                byte expectedSid = (byte)(reqSid + 0x40);
+                long deadline = HighResolutionTimer.Milliseconds + p2star;
+
                 // Wait the response.
-                do
+                while (true)
                 {
+                    if (HighResolutionTimer.Milliseconds >= deadline)
+                    {
+                        response = null;
+                        Log.Information("Uds received async is null.");
+                        break;
+                    }
+
                     // Create a new cancellation token source for timeout check.
                     using (CancellationTokenSource cts = new CancellationTokenSource(isPending ? p2star : p2))
                     {
-                        //Log.Information("Uds: received service.");
-
                         // Waiting for the service response.
                         response = await ReceivedAsync(cts.Token);
                     }
 
-                    // The response is a negative response with code = 78?
-                    if (response != null)
-                    {
-                        if (response.Data != null)
-                        {
-                            //App.specialLogger?.ForContext("Special", true).Information("READ:" + BitConverter.ToString(response.Data).Replace("-", " "));
-                        }
-                        OnPduReceived(response);
-                        isPending = IsPendingResponse(response);
-                    }
-                    else
+                    if (response == null)
                     {
                         Log.Information("Uds received async is null.");
                         break;//timeout.
                     }
 
-                } while (isPending);
+                    if (response.Data != null && response.Data.Length > 0)
+                    {
+                        byte sid = response.Data[0];
+                        bool positive = sid == expectedSid;
+                        bool negative = sid == 0x7F && response.Data.Length > 1 && response.Data[1] == reqSid;
+                        if (!positive && !negative)
+                        {
+                            // 迟到的其它服务应答 / 残留帧：丢弃，继续等本次请求的应答
+                            continue;
+                        }
+
+                        OnPduReceived(response);
+                        isPending = IsPendingResponse(response);
+                    }
+                    else
+                    {
+                        isPending = false;
+                    }
+
+                    if (!isPending) break;
+                }
 
                 // Validate the response here.
                 result = ValidateResponse(response);
@@ -1546,6 +1684,9 @@ namespace TestingSoftware.Protocols.Diag
         {
             bool accept = false;
 
+            // 任意下行报文都说明链路还活着（周期帧、应答都算）
+            LastRxMs = HighResolutionTimer.Milliseconds;
+
             // Try to protect the _ids in different thread.
             lock (this)
             {
@@ -1555,7 +1696,8 @@ namespace TestingSoftware.Protocols.Diag
                     // Periodic data identifier.
                     if (pdu.Data[0] == Pid)
                     {
-                        _periodicPdus.Writer.WriteAsync(pdu);
+                        // 用 TryWrite 而不是不 await 的 WriteAsync：周期帧绝不能堆积未完成的写入任务
+                        _periodicPdus.Writer.TryWrite(pdu);
 
                         accept = true;
                     }

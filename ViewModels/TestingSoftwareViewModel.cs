@@ -65,6 +65,12 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         private bool SkipIoModules => Model != null && Model.SkipIoModules;
 
+        /// <summary>
+        /// 配置开关：为 true 时开始测试跳过所有 IO 模块（ModBus DI/DO/AI/AO）操作。
+        /// 见 <see cref="TestingSoftwareModel.SkipIoModules"/>。
+        /// </summary>
+        private bool SkipCanModules => Model != null && Model.SkipCanModules;
+
         /// <summary>串口自动扫描定时器（启动后每 1 秒刷新一次串口列表）。</summary>
         private readonly DispatcherTimer? _serialScanTimer;
         /// <summary>
@@ -106,6 +112,39 @@ namespace TestingSoftware.ViewModels
 
         /// <summary>最近一次断开动作完成的时刻（HighResolutionTimer.Milliseconds）。</summary>
         private long _lastDisconnectMs;
+
+        /// <summary>扫码自动流程：扫码值稳定多久后才动作，避免逐字符输入时被反复触发（毫秒）。</summary>
+        private const int ScanDebounceMs = 400;
+
+        /// <summary>扫码 SN 后等待蓝牙连接就绪的最长时间（毫秒）。</summary>
+        private const int AutoStartConnectWaitMs = 30_000;
+
+        /// <summary>MAC 扫码防抖令牌。</summary>
+        private CancellationTokenSource? _macScanDebounceCts;
+
+        /// <summary>SN 扫码防抖令牌。</summary>
+        private CancellationTokenSource? _snScanDebounceCts;
+
+        /// <summary>是否已有扫码触发的自动连接在跑（0/1）。</summary>
+        private int _autoConnectRunning;
+
+        /// <summary>手动停止标记：只有用户点“停止”才落 JOB_STOPPED；开始/复测取消旧任务不算手动停止。</summary>
+        private volatile bool _manualStopRequested;
+
+        /// <summary>测试中异常断连的重连互斥（0=空闲，1=正在重连），避免断连事件与看门狗重复触发。</summary>
+        private int _reconnectRunning;
+
+        /// <summary>链路假死看门狗定时器（1 秒一次，只在测试中生效）。</summary>
+        private DispatcherTimer? _linkWatchdogTimer;
+
+        /// <summary>当前在跑的扫码自动连接任务，供 SN 流程复用等待。</summary>
+        private Task? _autoConnectTask;
+
+        /// <summary>是否已有扫码触发的自动启动测试流程在跑（0/1）。</summary>
+        private int _autoStartRunning;
+
+        /// <summary>最近一次扫码自动连接成功的 MAC，避免重复连接。</summary>
+        private string _lastAutoConnectedMac = string.Empty;
 
         private bool _canClickConnect = true;
 
@@ -228,6 +267,9 @@ namespace TestingSoftware.ViewModels
                     {
                         ReTestSn = _scanSn.Substring(_scanSn.Length - 5);
                     }
+
+                    // SN 校验通过：防抖后尝试自动启动测试（未连接则先等蓝牙连上再启动）
+                    ScheduleAutoStartAfterSnScan();
                 }
                 else
                 {
@@ -371,6 +413,9 @@ namespace TestingSoftware.ViewModels
                 {
                     Status = 0;
                     TestStatusInfo = string.Empty;
+
+                    // MAC 校验通过：防抖后尝试自动连接
+                    ScheduleAutoConnectAfterMacScan(macHex);
                 }
             }
         }
@@ -444,6 +489,14 @@ namespace TestingSoftware.ViewModels
             };
             _serialScanTimer.Tick += (s, e) => RefreshSerialPorts();
             _serialScanTimer.Start();
+
+            // 链路假死看门狗：测试中持续发请求却长时间收不到任何下行报文 → 判定假死并自动重连
+            _linkWatchdogTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromSeconds(1)
+            };
+            _linkWatchdogTimer.Tick += (s, e) => CheckLinkAlive();
+            _linkWatchdogTimer.Start();
             if (Model == null)
             {
                 Model = new TestingSoftwareModel();
@@ -453,19 +506,30 @@ namespace TestingSoftware.ViewModels
             {
                 SumartBluetoothAdapter.OnUnexpectedDisconnect += async (s, e) =>
                 {
+                    bool testing = IsTesting;
                     await DisconnectAsync();
+                    App.isPause = false;
+                    SetConnectionState(false);
 
-                    await Application.Current.Dispatcher.InvokeAsync(() =>
+                    if (testing)
                     {
-                        App.isPause = false;
-                        SetConnectionState(false);
-                        Log.Error(
-                            "蓝牙连接意外断开，请检查蓝牙状态后重新连接！!",
-                            "蓝牙断开",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Warning
-                        );
-                    });
+                        // 测试中异常断连：不弹框、不中止测试，直接进入自动重连，成功后继续跑
+                        Log.Warning("测试中检测到蓝牙异常断开，启动自动重连");
+                        TestStatusInfo = "链路断开，正在自动重连…";
+                        await ReconnectDuringTestAsync();
+                    }
+                    else
+                    {
+                        await Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            Log.Error(
+                                "蓝牙连接意外断开，请检查蓝牙状态后重新连接！!",
+                                "蓝牙断开",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Warning
+                            );
+                        });
+                    }
                     OnPropertyChanged(nameof(ConnectAction));
                 };
             }
@@ -653,6 +717,13 @@ namespace TestingSoftware.ViewModels
             }
             else
             {
+                // 扫码已触发自动连接且仍在进行中：避免与手动点击并发建连
+                if (Volatile.Read(ref _autoConnectRunning) == 1)
+                {
+                    Log.Information("扫码自动连接正在进行，忽略本次手动连接请求");
+                    return;
+                }
+
                 result = await ConnectAsync();
                 if (result == 0)
                 {
@@ -721,6 +792,9 @@ namespace TestingSoftware.ViewModels
             }
 
             result = await (BluetoothViewAdapter.Model?.StopAsync() ?? Task.FromResult(-1));
+
+            // 断开后实时信息立即归零并显示 FF，避免界面上挂着上一次连接的旧值
+            Monitor.ResetStatistics();
 
             // 记录断开完成时刻：后续连接必须与本次断开间隔至少 ReconnectGuardMs
             _lastDisconnectMs = HighResolutionTimer.Milliseconds;
@@ -825,6 +899,9 @@ namespace TestingSoftware.ViewModels
                     {
                         Log.Warning("蓝牙已连接，但 UDS 服务启动失败，返回 {Result}", udsResult);
                     }
+
+                    // 每次新连接都清零实时信息的帧数统计，并在首帧到达前显示 FF
+                    Monitor.ResetStatistics();
                 }
             }
             else
@@ -1008,6 +1085,242 @@ namespace TestingSoftware.ViewModels
             string pattern = Model.SnWildcard;
             return Regex.IsMatch(sn, pattern);
         }
+
+        #region 扫码自动流程
+
+        /// <summary>
+        /// MAC 扫码校验通过后的防抖入口：等输入稳定后再尝试自动连接，避免逐字符输入触发多次连接。
+        /// </summary>
+        private void ScheduleAutoConnectAfterMacScan(string macHex)
+        {
+            _macScanDebounceCts?.Cancel();
+            _macScanDebounceCts?.Dispose();
+            CancellationTokenSource cts = new CancellationTokenSource();
+            _macScanDebounceCts = cts;
+            _ = AutoConnectAfterMacScanAsync(macHex, cts.Token);
+        }
+
+        private async Task AutoConnectAfterMacScanAsync(string macHex, CancellationToken token)
+        {
+            try
+            {
+                await Task.Delay(ScanDebounceMs, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return; // 扫码值又被改动，本次作废
+            }
+
+            // 复核当前输入仍是这个 MAC，且格式合法
+            if (!TryNormalizeMac(MacAddressInput, out string currentMac, out _)) return;
+            if (string.IsNullOrEmpty(currentMac) || currentMac != macHex) return;
+
+            await AutoConnectByMacAsync(macHex);
+        }
+
+        /// <summary>
+        /// 按 MAC 自动连接电控设备；已连接、测试中则跳过。
+        /// </summary>
+        private async Task AutoConnectByMacAsync(string macHex)
+        {
+            if (IsTesting)
+            {
+                Log.Information("扫码MAC {Mac}：测试进行中，跳过自动连接", macHex);
+                return;
+            }
+
+            if (IsDeviceConnected)
+            {
+                if (_lastAutoConnectedMac == macHex || string.IsNullOrEmpty(_lastAutoConnectedMac))
+                {
+                    Log.Information("扫码MAC {Mac}：蓝牙已连接，无需重复连接", macHex);
+                    _lastAutoConnectedMac = macHex;
+                }
+                else
+                {
+                    Log.Information("扫码MAC {Mac}：当前已连接其它设备，保持现有链路", macHex);
+                }
+                return;
+            }
+
+            await StartAutoConnect(macHex);
+        }
+
+        /// <summary>
+        /// 单实例启动自动连接：已有连接任务在跑时复用同一个任务。
+        /// </summary>
+        private Task StartAutoConnect(string macHex)
+        {
+            if (Interlocked.CompareExchange(ref _autoConnectRunning, 1, 0) != 0)
+            {
+                return _autoConnectTask ?? Task.CompletedTask;
+            }
+
+            Task task = AutoConnectCoreAsync(macHex);
+            _autoConnectTask = task;
+            return task;
+        }
+
+        private async Task AutoConnectCoreAsync(string macHex)
+        {
+            try
+            {
+                if (IsDeviceConnected) return;
+
+                // 用空闲态而不是 JOB_RUNNING(1)，避免被 IsTesting 误判成正在测试
+                Status = JOB_IDLE;
+                TestStatusInfo = $"正在自动连接 {macHex} …";
+                ChangeUI();
+
+                int result;
+                try
+                {
+                    result = await ConnectAsync();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "扫码MAC {Mac} 自动连接异常", macHex);
+                    result = -1;
+                }
+
+                if (result == 0)
+                {
+                    SetConnectionState(true);
+                    // 连接成功后自动开启实时监控（失败重试 3 次，间隔 500ms）
+                    await Monitor.StartWithRetryAsync();
+                    _lastAutoConnectedMac = macHex;
+                    Status = 0;
+                    TestStatusInfo = "蓝牙连接成功";
+                    Log.Information("扫码MAC {Mac} 自动连接成功", macHex);
+                }
+                else
+                {
+                    Status = -1;
+                    TestStatusInfo = "自动连接电控设备失败";
+                    Log.Warning("扫码MAC {Mac} 自动连接失败，返回 {Result}", macHex, result);
+                }
+                ChangeUI();
+            }
+            finally
+            {
+                Volatile.Write(ref _autoConnectRunning, 0);
+                _autoConnectTask = null;
+            }
+        }
+
+        /// <summary>
+        /// SN 扫码校验通过后的防抖入口：等输入稳定后再尝试启动测试。
+        /// </summary>
+        private void ScheduleAutoStartAfterSnScan()
+        {
+            _snScanDebounceCts?.Cancel();
+            _snScanDebounceCts?.Dispose();
+            CancellationTokenSource cts = new CancellationTokenSource();
+            _snScanDebounceCts = cts;
+            _ = AutoStartAfterSnScanAsync(cts.Token);
+        }
+
+        private async Task AutoStartAfterSnScanAsync(CancellationToken token)
+        {
+            try
+            {
+                await Task.Delay(ScanDebounceMs, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return; // 扫码值又被改动，本次作废
+            }
+
+            if (string.IsNullOrWhiteSpace(ScanSn) || !IsValidSnFormat(ScanSn)) return;
+            if (IsTesting)
+            {
+                Log.Information("扫码SN {Sn}：测试已在进行，忽略自动启动", ScanSn);
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref _autoStartRunning, 1, 0) != 0) return;
+            try
+            {
+                if (!IsDeviceConnected)
+                {
+                    // 1) 若已有自动连接在跑，先等它；否则在已知 MAC 时主动发起连接
+                    Task? connectTask = _autoConnectTask;
+                    if (connectTask == null && !string.IsNullOrWhiteSpace(MacAddressInput))
+                    {
+                        if (TryNormalizeMac(MacAddressInput, out string macHex, out _) && !string.IsNullOrEmpty(macHex))
+                        {
+                            connectTask = StartAutoConnect(macHex);
+                        }
+                    }
+
+                    if (connectTask != null)
+                    {
+                        try { await connectTask; } catch (Exception ex) { Log.Warning(ex, "扫码SN：等待自动连接结束异常"); }
+                    }
+
+                    // 2) 仍未连上：等蓝牙连接成功（用户手动点“链接”或后续扫码触发）
+                    if (!IsDeviceConnected)
+                    {
+                        Status = JOB_IDLE;
+                        TestStatusInfo = "等待蓝牙连接成功后自动开始测试";
+                        ChangeUI();
+                        Log.Information("扫码SN {Sn}：蓝牙未连接，等待连接就绪", ScanSn);
+                        bool connected = await WaitUntilConnectedAsync(AutoStartConnectWaitMs);
+                        if (!connected)
+                        {
+                            Status = -1;
+                            TestStatusInfo = "蓝牙未连接，未开始测试";
+                            ChangeUI();
+                            Log.Warning("扫码SN {Sn}：等待蓝牙连接超时（{Wait}ms），放弃自动启动", ScanSn, AutoStartConnectWaitMs);
+                            return;
+                        }
+                    }
+                }
+
+                if (!IsDeviceConnected)
+                {
+                    Status = -1;
+                    TestStatusInfo = "蓝牙未连接，未开始测试";
+                    ChangeUI();
+                    return;
+                }
+
+                // 3) 启动测试：复用现有开始测试命令（内含连接/串口/协议栈准备与全量测试流程）
+                TestStatusInfo = "扫码SN校验通过，自动开始测试";
+                Log.Information("扫码SN {Sn}：蓝牙已连接，自动启动测试", ScanSn);
+                StartJobAction.Execute(null);
+            }
+            finally
+            {
+                Volatile.Write(ref _autoStartRunning, 0);
+            }
+        }
+
+        /// <summary>
+        /// 轮询等待蓝牙连接就绪，超时或取消返回 false。
+        /// </summary>
+        private async Task<bool> WaitUntilConnectedAsync(int timeoutMs)
+        {
+            if (IsDeviceConnected) return true;
+
+            long start = HighResolutionTimer.Milliseconds;
+            while (HighResolutionTimer.Milliseconds - start < timeoutMs)
+            {
+                if (IsDeviceConnected) return true;
+                try
+                {
+                    await Task.Delay(200);
+                }
+                catch (Exception)
+                {
+                    return false;
+                }
+            }
+            return IsDeviceConnected;
+        }
+
+        #endregion
+
         private void SetConnectionState(bool connected)
         {
             BluetoothViewAdapter.Running = connected;
@@ -1023,6 +1336,8 @@ namespace TestingSoftware.ViewModels
             ChangeUI();
             Status = 1;
             TestStatusInfo = "开始测试";
+            // 本轮是新测试：清掉手动停止标记，避免取消旧任务时被误记为“手动终止”
+            _manualStopRequested = false;
             _jobCts?.Cancel();
             _jobCts?.Dispose();
             _jobCts = new CancellationTokenSource();
@@ -1303,40 +1618,19 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         public ICommand StopJobAction => new AsyncCommand(async sender =>
         {
+            // 标记为用户手动停止：只有这种情况才落 JOB_STOPPED + 写“手动终止”记录
+            _manualStopRequested = true;
+
             //触发取消
             _jobCts?.Cancel();
             _job3E80Cts?.Cancel();
 
-            //等待后台任务完成，不要用Wait，用await，不阻塞UI线程
-            if (_jobMainTask != null)
-            {
-                try
-                {
-                    await _jobMainTask;
-                }
-                catch (OperationCanceledException)
-                {
-                    //正常取消，忽略
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "停止时等待主测试任务异常");
-                }
-            }
-            if (_job3ETask != null)
-            {
-                try
-                {
-                    await _job3ETask;
-                }
-                catch (OperationCanceledException)
-                {
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "停止时等待3E后台任务异常");
-                }
-            }
+            // 等待后台任务收尾，但最多等 JobStopTimeoutMs：某个任务卡住时不能让界面一直停在“测试中”
+            await WaitTaskOrTimeout(_jobMainTask, JobStopTimeoutMs, "主测试任务");
+            await WaitTaskOrTimeout(_job3ETask, JobStopTimeoutMs, "3E后台任务");
+
+            // 兜底：无论后台任务是否按时结束，都把当前任务和全局状态落到“手动停止”
+            StopCurrentJobForManualStop();
 
             // 异步停止uds，不要用Wait()
             if (_udsService != null)
@@ -1355,6 +1649,293 @@ namespace TestingSoftware.ViewModels
             ChangeUI();
         }, _ => IsDeviceConnected && IsTesting);
 
+        /// <summary>停止时等待后台任务的最长时间（毫秒）。</summary>
+        private const int JobStopTimeoutMs = 5000;
+
+        /// <summary>
+        /// 等待后台任务结束，超时则放弃等待并记一条警告，保证停止流程一定往前走。
+        /// </summary>
+        private async Task WaitTaskOrTimeout(Task? task, int timeoutMs, string name)
+        {
+            if (task == null) return;
+
+            Task completed = await Task.WhenAny(task, Task.Delay(timeoutMs));
+            if (completed != task)
+            {
+                Log.Warning($"停止测试：等待{name}超过 {timeoutMs}ms 仍未结束，继续执行停止流程");
+                return;
+            }
+
+            try
+            {
+                await task;
+            }
+            catch (OperationCanceledException)
+            {
+                // 正常取消，忽略
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, $"停止测试：等待{name}异常");
+            }
+        }
+
+        /// <summary>
+        /// 3E80 会话保活循环：循环条件是 UDS 处于 Running，断链时 UDS 停掉会让循环自然退出，
+        /// 因此重连成功后必须再次调用本方法恢复保活，否则后续任务会因 S3 会话超时而失败。
+        /// </summary>
+        private Task StartKeepAliveLoopAsync(CancellationToken token3E)
+        {
+            return Task.Run(async () =>
+            {
+                try
+                {
+                    if (_udsService.Running)
+                    {
+                        await _mcuSecurityService.UnlockMCUNoPopAsync();
+                        var startTime = HighResolutionTimer.Milliseconds;
+                        while (_udsService.Running && !token3E.IsCancellationRequested)
+                        {
+                            // 正常数据发送后 1.5s 内不发送 3E80，等待静默窗口过后再按周期发送
+                            if (HighResolutionTimer.Milliseconds - _udsService.LastNormalRequestMs < 1_500)
+                            {
+                                await Task.Delay(100, token3E);
+                                continue;
+                            }
+                            if (HighResolutionTimer.Milliseconds - startTime > 3_500)
+                            {
+                                startTime = HighResolutionTimer.Milliseconds;
+                                Service3e service3e = new Service3e();
+                                service3e.SubFunction = service3e.SUPPRESS_RESPONSE;
+                                await _udsService.Request(service3e.BuildRequest(), token3E);
+                            }
+                            else
+                            {
+                                await Task.Delay(100, token3E);
+                            }
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    //正常停止
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "3E后台任务异常");
+                }
+            }, token3E);
+        }
+
+        /// <summary>IO 步进（AO 阶梯输出）每级最小间隔（毫秒）：配置小于该值时按该值执行。</summary>
+        private const int MinIoStepIntervalMs = 800;
+
+        /// <summary>测试中重连最大尝试次数。</summary>
+        private const int ReconnectAttempts = 3;
+
+        /// <summary>测试中重连两次尝试之间的间隔（毫秒）；ConnectAsync 内部还有 3 秒断连保护。</summary>
+        private const int ReconnectIntervalMs = 5000;
+
+        /// <summary>链路假死判定：长时间没有任何下行报文。</summary>
+        private const int LinkSilenceTimeoutMs = 12000;
+
+        /// <summary>链路假死判定：最近这段时间内确实下发过请求（排除“本来就空闲”的误判）。</summary>
+        private const int LinkRequestRecentMs = 6000;
+
+        /// <summary>
+        /// 测试中异常断连的自动重连：最多 3 次，成功后重启 UDS 与实时监控，让任务链按原逻辑继续；
+        /// 全部失败才把当前任务落 JOB_FAIL（“通讯中断且重连失败”）。
+        /// </summary>
+        private async Task ReconnectDuringTestAsync()
+        {
+            if (Interlocked.CompareExchange(ref _reconnectRunning, 1, 0) != 0)
+            {
+                return; // 已有重连在进行
+            }
+
+            try
+            {
+                SetConnectionState(false);
+
+                // 断链后先收掉上一条链路的会话与监控，避免旧 CTS / 旧 GATT 订阅污染新链路
+                if (BluetoothViewAdapter.Running)
+                {
+                    try
+                    {
+                        await DisconnectAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "测试中重连：断开旧链路异常");
+                    }
+                }
+                else
+                {
+                    try { await Monitor.StopAsync(); } catch (Exception ex) { Log.Debug(ex, "重连前停止实时监控异常"); }
+                    try { await _udsService.StopAsync(); } catch (Exception ex) { Log.Debug(ex, "重连前停止 UDS 异常"); }
+                }
+
+                for (int attempt = 1; attempt <= ReconnectAttempts; attempt++)
+                {
+                    if (IsDeviceConnected)
+                    {
+                        break;
+                    }
+
+                    Log.Warning("测试中链路异常：第 {Attempt}/{Max} 次重连尝试", attempt, ReconnectAttempts);
+                    TestStatusInfo = $"链路断开，正在重连（{attempt}/{ReconnectAttempts}）…";
+                    ChangeUI();
+
+                    int result = -1;
+                    try
+                    {
+                        result = await ConnectAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "测试中重连异常");
+                    }
+
+                    if (result == 0)
+                    {
+                        SetConnectionState(true);
+                        // 重新进扩展会话 + 恢复 2A 主动上传；监控起不来也不阻断任务链（转速判定会自动回退 22）
+                        int monitorResult = await Monitor.StartWithRetryAsync();
+                        Log.Information("测试中链路异常：第 {Attempt} 次重连成功（实时监控={Monitor}），继续测试", attempt, monitorResult);
+
+                        // 3E80 保活循环在断链时已随 UDS 停止自然退出，这里重新拉起，避免 S3 会话超时
+                        if (_job3E80Cts != null && !_job3E80Cts.IsCancellationRequested
+                            && (_job3ETask == null || _job3ETask.IsCompleted))
+                        {
+                            _job3ETask = StartKeepAliveLoopAsync(token3E80);
+                            Log.Information("测试中链路异常：3E80 会话保活已恢复");
+                        }
+                        TestStatusInfo = "重连成功，继续测试";
+                        ChangeUI();
+                        return;
+                    }
+
+                    if (attempt < ReconnectAttempts)
+                    {
+                        await Task.Delay(ReconnectIntervalMs);
+                    }
+                }
+
+                Log.Error("测试中链路异常：重连 {Max} 次仍失败，测试按通讯失败结束", ReconnectAttempts);
+                Job? job = CurrentJob;
+                if (job != null)
+                {
+                    JobStatusChanged(job, JOB_FAIL, "通讯中断且重连失败");
+                }
+                else
+                {
+                    Status = JOB_FAIL;
+                    TestStatusInfo = "通讯中断且重连失败";
+                }
+                SetConnectionState(false);
+                ChangeUI();
+            }
+            finally
+            {
+                Volatile.Write(ref _reconnectRunning, 0);
+            }
+        }
+
+        /// <summary>
+        /// 链路假死看门狗：Windows 的 Disconnected 事件实测会晚到 1~2 分钟，
+        /// 这里用“一直在发请求、却长时间收不到任何下行报文”自行判定假死并触发重连。
+        /// </summary>
+        private void CheckLinkAlive()
+        {
+            if (!IsTesting || !IsDeviceConnected) return;
+            if (Volatile.Read(ref _reconnectRunning) == 1) return;
+
+            long now = HighResolutionTimer.Milliseconds;
+            long lastRx = _udsService.LastRxMs;
+            long lastTx = _udsService.LastRequestMs;
+            if (lastTx < 0) return; // 还没下发过请求，无从判断
+
+            long silence = now - lastRx;
+            if (silence > LinkSilenceTimeoutMs && now - lastTx <= LinkRequestRecentMs)
+            {
+                Log.Warning("链路看门狗：已 {Silence}ms 无任何下行报文（最近 {Tx}ms 前还下发过请求），判定链路假死，启动重连",
+                    silence, now - lastTx);
+                _ = ReconnectDuringTestAsync();
+            }
+        }
+
+        /// <summary>
+        /// 手动停止时把任务和全局状态落到 JOB_STOPPED 终态。
+        /// 之前停止流程只取消 CTS、没有改状态，界面会停在“……-- 测试中”，停止/开始/复测按钮状态也不对。
+        /// </summary>
+        private void StopCurrentJobForManualStop()
+        {
+            Job? job = CurrentJob;
+            if (job != null)
+            {
+                JobStatusChanged(job, JOB_STOPPED, "手动停止");
+            }
+            else
+            {
+                Status = JOB_STOPPED;
+                TestStatusInfo = "已手动停止";
+            }
+
+            // 配置里其余还没跑的任务一律标记为“未执行”，避免下次开始时残留 RUNNING
+            if (Model?.Jobs != null)
+            {
+                foreach (var item in Model.Jobs)
+                {
+                    if (item.Status == JOB_RUNNING || item.Status == JOB_RETRYING)
+                    {
+                        item.Status = JOB_STOPPED;
+                    }
+                }
+            }
+        }
+
+        /// <summary>电机转速 DID（22 09-03 / 2A 动态 DID 里的 0x0903），转速判定的数据来源标识。</summary>
+        private const ushort DID_MOTOR_SPEED = 0x0903;
+
+        /// <summary>实时转速的有效期：超过这个时间没收到新周期帧就认为数据不可信，回退到 22 请求。</summary>
+        private const int RealtimeSpeedValidMs = 2000;
+
+        /// <summary>
+        /// 用实时信息（2A 主动上传的 0x0903）里的 RPM 判定转速，替代 22 09-03 请求。
+        /// </summary>
+        /// <returns>0=用实时数据判定通过；1=用实时数据判定失败；2=实时数据不可用，调用方回退到 22 请求。</returns>
+        private int JudgeMotorSpeedByRealtime(Job job, Service22 service22)
+        {
+            if (!Monitor.IsMonitoring)
+            {
+                Log.Debug("转速判定：实时监控未开启，回退到 22 09-03");
+                return 2;
+            }
+
+            long lastFrameMs = Monitor.LastFrameMs;
+            if (lastFrameMs <= 0 || HighResolutionTimer.Milliseconds - lastFrameMs > RealtimeSpeedValidMs)
+            {
+                Log.Debug("转速判定：实时帧超过 {Ms}ms 未刷新，回退到 22 09-03", RealtimeSpeedValidMs);
+                return 2;
+            }
+
+            var signal = service22.Signals[0];
+            var signalViewModel = new SignalViewModel(signal);
+            double rpm = Monitor.CurrentMotorSpeed;
+            double expectation = Convert.ToDouble(signalViewModel.Expectation);
+            double tolerance = Convert.ToDouble(signalViewModel.Tolerance);
+
+            Log.Information($"实时转速:{rpm:F0} 期望:{expectation:F0}±{tolerance:F0} {signal.Name}");
+
+            if (rpm < expectation - tolerance || rpm > expectation + tolerance)
+            {
+                Log.Information($"执行任务失败:{job.JobName}-{signal.Name},实时转速不满足");
+                return 1;
+            }
+
+            return 0;
+        }
+
         /// <summary>
         /// 重新测试
         /// </summary>
@@ -1363,6 +1944,8 @@ namespace TestingSoftware.ViewModels
             ChangeUI();
             Status = 1;
             TestStatusInfo = "复测开始";
+            // 复测同样清掉手动停止标记，取消旧任务链时不会被误记为“手动终止”
+            _manualStopRequested = false;
 
             _jobCts?.Cancel();
             _jobCts?.Dispose();
@@ -1456,46 +2039,7 @@ namespace TestingSoftware.ViewModels
                 token3E80 = _job3E80Cts.Token;
 
                 //发送3E80维持会话,在这个job结束后,3E80停止发送
-                _job3ETask = Task.Run(async () =>
-                {
-                    try
-                    {
-                        if (_udsService.Running)
-                        {
-                            await _mcuSecurityService.UnlockMCUNoPopAsync();
-                            var _securityService = new McuSecurityService(_udsService);
-                            var startTime = HighResolutionTimer.Milliseconds;
-                            while (_udsService.Running && !token3E80.IsCancellationRequested)
-                            {
-                                // 正常数据发送后 1.5s 内不发送 3E80，等待静默窗口过后再按周期发送
-                                if (HighResolutionTimer.Milliseconds - _udsService.LastNormalRequestMs < 1_500)
-                                {
-                                    await Task.Delay(100, token3E80);
-                                    continue;
-                                }
-                                if (HighResolutionTimer.Milliseconds - startTime > 3_500)
-                                {
-                                    startTime = HighResolutionTimer.Milliseconds;
-                                    Service3e service3e = new Service3e();
-                                    service3e.SubFunction = service3e.SUPPRESS_RESPONSE;
-                                    await _udsService.Request(service3e.BuildRequest(), token3E80);
-                                }
-                                else
-                                {
-                                    await Task.Delay(100, token3E80);
-                                }
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        //正常停止
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error(ex, "3E后台任务异常");
-                    }
-                }, token3E80);
+                _job3ETask = StartKeepAliveLoopAsync(token3E80);
                 await Task.Delay(1000, ct);
 
                 // ===== 开启实时监控 =====
@@ -1546,6 +2090,12 @@ namespace TestingSoftware.ViewModels
                     await Task.Delay(job.StartDelayTimeMs, ct);
                     if (job.IsCan)
                     {
+                        if(SkipCanModules)
+                        {
+                            JobStatusChanged(job, 2);
+                            await Task.Delay(50_000, ct);
+                            continue;
+                        }
                         int res = ExecuCan(job, ct);
                         if (res == -1)
                         {
@@ -1592,10 +2142,18 @@ namespace TestingSoftware.ViewModels
                             if (stepDelta == 0)
                                 throw new Exception($"任务{job.JobName}:阶梯步进StepValue不能为0");
 
-                            // 先输出起始值，再开始判定
+                            // 硬件侧要求：IO 步进每级间隔不得小于 800ms，配置写小了统一按 800ms 执行
+                            if (stepDelayMs < MinIoStepIntervalMs)
+                            {
+                                Log.Warning($"阶梯输出间隔 {stepDelayMs}ms 小于最小值 {MinIoStepIntervalMs}ms，按 {MinIoStepIntervalMs}ms 执行:{job.JobName}");
+                                stepDelayMs = MinIoStepIntervalMs;
+                            }
+
+                            // 先输出起始值，等一级稳定时间后再开始判定（首级同样不能小于最小间隔）
                             stepService.ApplyStepValue(stepValue);
                             WriteAoValues(stepService);
                             Log.Information($"阶梯输出启用:{job.JobName},起始=0x{stepValue:X4},步进=0x{stepDelta:X4},上限=0x{stepMax:X4},每级等待{stepDelayMs}ms");
+                            await Task.Delay(stepDelayMs, ct);
                         }
 
                         do
@@ -1723,6 +2281,27 @@ namespace TestingSoftware.ViewModels
                                         int? ResponseValue = 0;
                                         var service22 = (Service22)diagService;
                                         if (service22.Signals.Count == 0) throw new Exception("信号配置错误");
+
+                                        // 转速（22 09-03）判定优先用实时信息里的 RPM：固件对 22 09-03 偶发不回或回 0x0000，
+                                        // 而 2A 主动上传的 0x0903 有 60 帧/秒以上，判定更稳。实时数据不可用时才回退到 22 请求。
+                                        if (service22.Signals[0].Id == DID_MOTOR_SPEED)
+                                        {
+                                            int realtimeResult = JudgeMotorSpeedByRealtime(job, service22);
+                                            if (realtimeResult == 0)
+                                            {
+                                                JobStatusChanged(job, JOB_RUNNING);
+                                                continue;   // 已用实时转速判定通过，本轮不再下发 22 请求
+                                            }
+                                            if (realtimeResult == 1)
+                                            {
+                                                bool canRetry = job.Cycle && CycleNumber < job.CycleNumber;
+                                                JobStatusChanged(job, canRetry ? JOB_RETRYING : JOB_FAIL, service22.Signals[0].ErrorMsg);
+                                                failedThisRound = true;
+                                                break;      // 实时转速不在范围内：本轮失败
+                                            }
+                                            // realtimeResult == 2：实时数据不可用，继续走下面的 22 09-03 请求
+                                        }
+
                                         service22.Id = service22.Signals[0].Id;
                                         service22.ParsePayload = (w) =>
                                         {
@@ -2237,9 +2816,20 @@ namespace TestingSoftware.ViewModels
             catch (OperationCanceledException)
             {
                 await Monitor.StopAsync();
-                ChangeUI();
-                Log.Information("测试任务被手动终止");
-                _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, "测试任务被手动终止");
+
+                if (_manualStopRequested)
+                {
+                    // 用户点“停止”：落到终态，否则任务链中断后界面仍显示“测试中”
+                    StopCurrentJobForManualStop();
+                    ChangeUI();
+                    Log.Information("测试任务被手动终止");
+                    _csvHelper.Update(BluetoothViewAdapter.SelectedSlaveDevInfo.Address, ScanSn, Status == JOB_PASS, "测试任务被手动终止");
+                }
+                else
+                {
+                    // 开始/复测时取消上一条任务链：只做清理，不落“手动停止”状态、不写记录
+                    Log.Debug("旧测试任务链被新任务取消（非手动停止）");
+                }
 
             }
             catch (Exception ex)

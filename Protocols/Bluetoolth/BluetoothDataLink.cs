@@ -88,7 +88,14 @@ namespace TestingSoftware.Protocols.Bluetoolth
             // Create the transmitting and receiving channels.
             _txChannel = Channel.CreateBounded<Pdu>(5);
             _fdbkChannel = Channel.CreateBounded<Pdu>(5);
-            _rxChannel = Channel.CreateBounded<Pdu>(100);
+            // 接收通道用 DropOldest：上层消费慢时丢掉最旧的 PDU，绝不能让解析线程 await 卡住，
+            // 否则 _rxBuffer 会被撑满，后续应答（6A/62/7F）跟着一起丢。
+            _rxChannel = Channel.CreateBounded<Pdu>(new BoundedChannelOptions(200)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false
+            });
         }
 
         /// The method is used to open a serial port and start transmitting and receiving data.
@@ -167,6 +174,13 @@ namespace TestingSoftware.Protocols.Bluetoolth
 
                                 // There is not entire PDU in the receiving buffer. Exit.
                                 if (pdu.Data == null) break;
+
+                                // 按帧输出接收日志：0xE3 是 2A 主动上传的周期帧（每秒数十帧），直接跳过；
+                                // 其余应答（6A/7F/62/6C…）照常打印，方便定位丢应答的问题。
+                                if (pdu.Data.Length > 0 && pdu.Data[0] != 0xE3)
+                                {
+                                    Log.Information("Bluetooth Rx: Data:{0}", BitConverter.ToString(pdu.Data));
+                                }
                                 if (StartPasePduTime == 0)
                                 {
                                     StartPasePduTime = HighResolutionTimer.Milliseconds;
@@ -199,6 +213,10 @@ namespace TestingSoftware.Protocols.Bluetoolth
                                 // Log.Information($"Bluetooth Rx: Data:{formated}");
                             }
                         }
+                        catch (OperationCanceledException)
+                        {
+                            // 正常停止接收（断链/重连），不当错误处理
+                        }
                         catch (Exception ex)
                         {
                             Log.Error(ex, "Failed to parse the PDU from the UART receive buffer");
@@ -216,50 +234,50 @@ namespace TestingSoftware.Protocols.Bluetoolth
             _writeCharacteristic = gattCharacteristic;
             _notifyCharacteristic = notifyCharacteristic;
         }
+
+        /// <summary>
+        /// 清空底层接收缓冲：丢弃上一轮残留的半帧字节，以及已解析但还没被上层取走的 PDU。
+        /// 断链重连、请求重试、重新开启实时监控前调用，避免旧的周期上报帧污染下一轮请求应答匹配。
+        /// </summary>
+        public void ClearRxBuffer()
+        {
+            try
+            {
+                _rxBuffer?.Clear();
+
+                // 解析线程已经把 PDU 放进 _rxChannel 的也要一起清掉，否则下一轮请求会先读到旧帧
+                while (_rxChannel.Reader.TryRead(out _)) { }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug(ex, "BluetoothDataLink.ClearRxBuffer 异常");
+            }
+        }
         int pduNumber = 0;
         Int64 LastPasePduTime = 0;
         Int64 StartPasePduTime = 0;
-        private void OnDataReceived(GattCharacteristic sender, GattValueChangedEventArgs evt)
-        {
-
-            byte[] data = evt.CharacteristicValue.ToArray();
-
-            // 周期上报帧（55-AA + 长度 + 动态 DID 低字节 0xE3）不再打印：2A 主动上传时每秒几十帧，会把日志刷爆
-            if (!IsPeriodicUploadFrame(data))
-            {
-                string formated = BitConverter.ToString(data);
-                Log.Information($"Bluetooth Rx: Data:{formated}");
-            }
-
-            _rxBuffer.AddData(data);
-
-
-
-        }
 
         /// <summary>
-        /// 判定是否为“2A 主动上传的周期数据帧”：
-        /// 帧头 55-AA（或反序），payload 首字节为动态 DID 低字节 0xE3，且整包正好是这一帧（未夹带其它 PDU）。
+        /// GATT 通知回调：只负责把字节塞进接收缓冲，绝不做日志、绝不让异常逃出去。
+        /// 2A 主动上传时通知里塞满周期帧、还会被切成 3 字节碎片，在这里逐包打 hex 会把
+        /// 通知线程拖慢到丢帧（表现为 6A/62 应答丢失），所以原始字节日志已移到解析层按帧输出。
         /// </summary>
-        private static bool IsPeriodicUploadFrame(byte[] data)
+        private void OnDataReceived(GattCharacteristic sender, GattValueChangedEventArgs evt)
         {
-            if (data == null || data.Length < 5)
+            byte[] data = evt.CharacteristicValue.ToArray();
+
+            try
             {
-                return false;
+                _rxBuffer.AddData(data);
             }
-
-            bool head = (data[0] == 0x55 && data[1] == 0xAA) || (data[0] == 0xAA && data[1] == 0x55);
-            if (!head || data[4] != 0xE3)
+            catch (Exception ex)
             {
-                return false;
+                // 缓冲被撑满：丢掉残留半帧继续收，避免异常从 BLE 回调线程抛出导致后续帧全丢
+                _rxBuffer.Clear();
+                Log.Warning(ex, "Bluetooth Rx: 接收缓冲已满，已清空缓冲");
             }
-
-            // 帧结构：2 字节头 + 2 字节长度 + payload + 2 字节校验
-            int payloadLengthA = (data[2] << 8) | data[3];
-            int payloadLengthB = (data[3] << 8) | data[2];
-
-            return data.Length == payloadLengthA + 6 || data.Length == payloadLengthB + 6;
         }
+
 
         /// <summary>
         /// Stop the transmitting task.
