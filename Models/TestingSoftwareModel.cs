@@ -57,5 +57,15 @@ namespace TestingSoftware.Models
         /// the CAN bus baud rate for communication with the device.
         /// </summary>
         public int CanBaudRate { get; set; } = 500000;
+
+        /// <summary>
+        /// 跳过所有 IO 模块操作（调试/无 IO 模块联调开关）。
+        /// true：开始测试时不再打开 IO 模块串口，任务里的 DI/DO/AI/AO 读写全部跳过（视为通过），
+        /// 也不做 AO 阶梯输出与任务结束后的 DO/AO 复位，测试只执行 UDS 诊断任务。
+        /// false（默认）：行为与原来完全一致。
+        /// XML 配置中写成属性：SkipIoModules="true"。
+        /// </summary>
+        [XmlAttribute]
+        public bool SkipIoModules { get; set; } = false;
     }
 }

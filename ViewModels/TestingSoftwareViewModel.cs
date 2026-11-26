@@ -59,6 +59,12 @@ namespace TestingSoftware.ViewModels
         private ModBusService _modBusService;
         private bool _isConnectButtonEnabled = false;
 
+        /// <summary>
+        /// 配置开关：为 true 时开始测试跳过所有 IO 模块（ModBus DI/DO/AI/AO）操作。
+        /// 见 <see cref="TestingSoftwareModel.SkipIoModules"/>。
+        /// </summary>
+        private bool SkipIoModules => Model != null && Model.SkipIoModules;
+
         /// <summary>串口自动扫描定时器（启动后每 1 秒刷新一次串口列表）。</summary>
         private readonly DispatcherTimer? _serialScanTimer;
         /// <summary>
@@ -1053,7 +1059,8 @@ namespace TestingSoftware.ViewModels
                     return;
                 }
             }
-            if (!_modBusService.IsRunning)
+            // 跳过 IO 模块：不打开 IO 模块串口，避免无 IO 模块时卡在"请选择串口"
+            if (!SkipIoModules && !_modBusService.IsRunning)
             {
                 if (string.IsNullOrEmpty(SelectedSerialPort))
                 {
@@ -1069,12 +1076,16 @@ namespace TestingSoftware.ViewModels
                     return;
                 }
             }
-            else
+            else if (!SkipIoModules)
             {
                 if (!_modBusService.IsConnected)
                 {
                     if (string.IsNullOrEmpty(SelectedSerialPort)) { _modBusService.Stop(); _modBusService.Start(SelectedSerialPort); }
                 }
+            }
+            else
+            {
+                Log.Information("已开启 SkipIoModules，开始测试跳过 IO 模块串口初始化");
             }
             await _udsService.StopAsync();
             await _udsService.StartAsync();
@@ -1177,6 +1188,13 @@ namespace TestingSoftware.ViewModels
         /// </summary>
         private void WriteAoValues(IoService service)
         {
+            // 跳过 IO 模块：不向 IO 模块写任何 AO 数据
+            if (SkipIoModules)
+            {
+                Log.Information($"已开启 SkipIoModules，跳过 AO 输出:{service.IoType}");
+                return;
+            }
+
             if (service.Values == null || service.Values.Length == 0)
                 throw new Exception("AO数据长度不能为0");
             if (service.Values.Length % 2 != 0)
@@ -1395,7 +1413,8 @@ namespace TestingSoftware.ViewModels
                 }
             }
 
-            if (!_modBusService.IsRunning)
+            // 跳过 IO 模块：复测同样不打开 IO 模块串口
+            if (!SkipIoModules && !_modBusService.IsRunning)
             {
                 if (string.IsNullOrEmpty(SelectedSerialPort))
                 {
@@ -1552,7 +1571,8 @@ namespace TestingSoftware.ViewModels
                         ushort stepDelta = 0;
                         int stepDelayMs = 0;
                         bool stepDone = false;
-                        if (job.Services != null)
+                        // 跳过 IO 模块时不识别 AO 阶梯输出，避免访问 IO 模块
+                        if (!SkipIoModules && job.Services != null)
                         {
                             foreach (var s in job.Services)
                             {
@@ -1603,6 +1623,13 @@ namespace TestingSoftware.ViewModels
                                 bool[] bools;
                                 if (diagService is IoService)
                                 {
+                                    // 跳过 IO 模块：DI/DO/AI/AO 一律不读不写，直接按通过处理
+                                    if (SkipIoModules)
+                                    {
+                                        Log.Information($"已开启 SkipIoModules，跳过 IO 任务:{job.JobName}-{((IoService)diagService).IoType}");
+                                        continue;
+                                    }
+
                                     IoService? signalDiagService = (IoService)diagService;
                                     int datalent = 0;
                                     if (signalDiagService.Signals.Count == 0) throw new Exception("信号配置错误");
@@ -2163,16 +2190,20 @@ namespace TestingSoftware.ViewModels
                     }
                     finally
                     {
-                        try
+                        // 跳过 IO 模块：任务结束后也不再对 IO 模块做 DO/AO 复位
+                        if (!SkipIoModules)
                         {
+                            try
+                            {
 
-                        _modBusService.WriteOutputCoils(0x00, [false, false, false, false, false, false, false, false], 0x30);
-                        _modBusService.WriteOutputCoils(0x00, [false, false, false, false], 0x31);
-                        _modBusService.WriteAoMultiRegisters(0x00, [0x00,0x00,0x00,0x00], 0x30);
-                        }
-                        catch
-                        {
-                            //防止未接入设备报错
+                            _modBusService.WriteOutputCoils(0x00, [false, false, false, false, false, false, false, false], 0x30);
+                            _modBusService.WriteOutputCoils(0x00, [false, false, false, false], 0x31);
+                            _modBusService.WriteAoMultiRegisters(0x00, [0x00,0x00,0x00,0x00], 0x30);
+                            }
+                            catch
+                            {
+                                //防止未接入设备报错
+                            }
                         }
                     }
 
